@@ -1,0 +1,352 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+import express, { Request, Response, NextFunction } from "express";
+import cookieParser from "cookie-parser";
+import cors, { CorsOptions } from "cors";
+import http from "http";
+import { Server } from "./shims/socketIoServer";
+
+import logger from "./utils/logger";
+import connectDB from "./utils/connectDB";
+import UserModel from "./models/user.model";
+import rateLimiter from "./middleware/rateLimiter";
+import { sanitizeHtmlMiddleware } from "./middleware/sanitizeHtml.middleware";
+import { SocketController } from "./socket/socket";
+import { connectRedis, clearCacheByPrefix } from "./utils/redis";
+import { FixedDateExpiryCron } from "./cron/fixedDateCron";
+import { ensureContactIndexes } from "./utils/ensureContactIndexes";
+import { EmailWorker } from "./service/email.worker";
+
+import userRouter from "./routes/user.route";
+import inquiryRoute from "./routes/inquiry.route";
+import inquiryReplyRoute from "./routes/inquiryReply.routes";
+import blogRoute from "./routes/blog.route";
+import teamMemberRoute from "./routes/team-member.routes";
+import packageRoute from "./routes/package.routes";
+import subCategoryRoute from "./routes/subCategory.route";
+import categoryRoute from "./routes/category.route";
+import testimonialRoute from "./routes/testimonial.routes";
+import bookingRoute from "./routes/booking.routes";
+import deleteImageRoute from "./routes/deleteImage.routes";
+import pageRoute from "./routes/page.routes";
+import certificateRoute from "./routes/certificate.routes";
+import usefulInfoRoute from "./routes/usefulInfo.routes";
+import itineraryRoute from "./routes/itinerary.route";
+import shortItineraryRoute from "./routes/shortItinerary.route";
+import attractionRoute from "./routes/attraction.route";
+import inclusionRoute from "./routes/inclusion.route";
+import exclusionRoute from "./routes/exclusion.route";
+import fixedDateRoute from "./routes/fixedDate.route";
+import paxRoute from "./routes/pax.route";
+import requirementRoute from "./routes/requirement.route";
+import trackVisitRouter from "./routes/trackVisit.route";
+import contactRouter from "./routes/contact.routes";
+import contactReplyRoute from "./routes/contactReply.routes";
+import faqRoute from "./routes/faq.route";
+import statsRoute from "./routes/stats.route";
+import popularRoute from "./routes/popular.routes";
+import tripHighlightRoute from "./routes/trip-highlight.routes";
+import visitPlaceRoute from "./routes/visit-place.routes";
+import bookingReplyRoutes from "./routes/bookingReply.routes";
+import imageRoute from "./routes/image.route";
+import NotifiRoute from "./routes/seenNotification";
+import galleryRoute from "./routes/gallery.route";
+import packageInfoRoute from "./routes/packageInfo.route";
+import searchRoute from "./routes/search.routes";
+import customBookingRoute from "./routes/customBooking.route";
+import customBookingReplyRoutes from "./routes/customBookingReply.routes";
+import detailedItineraryRoute from "./routes/detailedItinerary.route";
+import homeGalleryRoute from "./routes/homeGallery.route";
+import homeFaqRoute from "./routes/homefaq";
+import homeTestimonialRoute from "./routes/home-testimonial.routes";
+import video from "./routes/video.routes";
+import gearRoutes from "./routes/gears.routes";
+import importantNotice from "./routes/importantNotice.route";
+import insurance from "./routes/insurance.route";
+import WhyLoveThisTrek from "./routes/whyLoveThisTrek.route";
+import Addons from "./routes/addOnServices.route";
+import basedSeason from "./routes/seasonInfo.routes";
+import captchaRoute from "./routes/captcha.route";
+import privateTripRoute from "./routes/privateTrip.route";
+
+const app = express();
+const server = http.createServer(app);
+
+app.use(express.json());
+app.use(cookieParser());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static("public"));
+app.use(sanitizeHtmlMiddleware);
+
+// Get allowed origins from environment variable
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0)
+  : [];
+
+logger.info("Allowed Origins:", allowedOrigins);
+
+// Add localhost origins for development
+const developmentOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5000",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  "http://127.0.0.1:5000",
+];
+
+const allAllowedOrigins = [...allowedOrigins, ...developmentOrigins];
+
+// CORS configuration
+const corsOptions: CorsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Check if the origin is in the allowed list
+    if (allAllowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // For production, log blocked origins
+    if (process.env.NODE_ENV === "production") {
+      logger.warn(`CORS blocked for origin: ${origin}`);
+    }
+
+    callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "Accept",
+    "X-Requested-With",
+    "Origin",
+    "Access-Control-Allow-Headers",
+    "Access-Control-Allow-Origin",
+  ],
+  exposedHeaders: ["Content-Length", "Content-Type"],
+  maxAge: 86400, // 24 hours
+  optionsSuccessStatus: 204,
+};
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// Handle preflight requests explicitly
+app.options("*", cors(corsOptions));
+
+// Custom middleware to ensure CORS headers are set
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin as string | undefined;
+
+  if (origin && allAllowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, Accept, X-Requested-With, Origin, Access-Control-Allow-Headers, Access-Control-Allow-Origin"
+    );
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS"
+    );
+    res.header("Access-Control-Expose-Headers", "Content-Length, Content-Type");
+  }
+
+  // Handle preflight requests
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  next();
+});
+
+app.use(rateLimiter);
+FixedDateExpiryCron.start();
+EmailWorker.start();
+
+// Socket.IO configuration with simpler CORS
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allAllowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      if (process.env.NODE_ENV === "production") {
+        logger.warn(`Socket.IO CORS blocked for origin: ${origin}`);
+      }
+
+      callback(new Error("Socket.IO CORS blocked"));
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    credentials: true,
+  },
+});
+
+const socketController = new SocketController(io);
+
+// Your routes
+app.use(
+  insurance,
+  importantNotice,
+  basedSeason,
+  WhyLoveThisTrek,
+  homeFaqRoute,
+  homeGalleryRoute,
+  homeTestimonialRoute,
+  searchRoute,
+  packageInfoRoute,
+  imageRoute,
+  galleryRoute,
+  popularRoute,
+  statsRoute,
+  trackVisitRouter,
+  userRouter,
+  categoryRoute,
+  subCategoryRoute,
+  packageRoute,
+  detailedItineraryRoute,
+  inquiryRoute,
+  inquiryReplyRoute,
+  blogRoute,
+  teamMemberRoute,
+  testimonialRoute,
+  bookingRoute,
+  customBookingRoute,
+  deleteImageRoute,
+  pageRoute,
+  certificateRoute,
+  usefulInfoRoute,
+  itineraryRoute,
+  shortItineraryRoute,
+  attractionRoute,
+  inclusionRoute,
+  exclusionRoute,
+  fixedDateRoute,
+  paxRoute,
+  requirementRoute,
+  contactRouter,
+  contactReplyRoute,
+  faqRoute,
+  tripHighlightRoute,
+  visitPlaceRoute,
+  bookingReplyRoutes,
+  NotifiRoute,
+  customBookingReplyRoutes,
+  gearRoutes,
+  captchaRoute,
+  video,
+  Addons,
+  privateTripRoute
+);
+
+app.get("/api/active-users", (req: Request, res: Response) => {
+  try {
+    res.json({
+      status: "success",
+      data: {
+        activeUsers: socketController.getActiveUsers(),
+        statistics: socketController.getStatistics(),
+      },
+    });
+  } catch (error) {
+    logger.error("Failed to fetch active users:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch active users data",
+    });
+  }
+});
+
+app.get("/healthChecker", (req: Request, res: Response) => {
+  res.status(200).json({
+    status: "success",
+    message: "Welcome to Fly East Server.",
+  });
+});
+
+app.delete("/api/v1/cache/clear", async (_req: Request, res: Response) => {
+  try {
+    await clearCacheByPrefix("");
+    return res.status(200).json({
+      status: "success",
+      message: "Cache cleared",
+    });
+  } catch (error: any) {
+    logger.error("Cache clear failed:", error);
+    return res.status(500).json({
+      status: "error",
+      message: error.message || "Failed to clear cache",
+    });
+  }
+});
+
+app.all("*", (req: Request, res: Response, next: NextFunction) => {
+  const err = new Error(`Route ${req.originalUrl} not found`) as any;
+  err.statusCode = 404;
+  next(err);
+});
+
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+  console.error(err);
+  res.status(err.statusCode || 500).json({
+    status: "error",
+    message: err.message || "Internal Server Error",
+  });
+});
+
+async function createAdminIfNotPresent() {
+  try {
+    const adminExist = await UserModel.findOne({
+      email: "flyeastadmin2025@webx.com",
+    });
+    if (!adminExist) {
+      await UserModel.create({
+        email: "flyeastadmin2025@webx.com",
+        password: "flyeastadminxy@123",
+        role: "admin",
+        isVerified: true,
+        verifyToken: "",
+      });
+      logger.info("✅ Admin user created successfully.");
+    }
+  } catch (error: any) {
+    logger.error(`Error creating admin user: ${error.message}`);
+  }
+}
+
+const port = process.env.PORT || 5000;
+
+connectRedis()
+  .then((connected) => {
+    if (connected) logger.info("Redis cache is enabled");
+    else logger.warn("Running without Redis cache");
+  })
+  .catch((error) => {
+    logger.warn(`Redis initialization warning: ${error.message}`);
+  });
+
+server.listen(port, async () => {
+  logger.info(`🚀 Server running on port http://localhost:${port}`);
+
+  try {
+    await connectDB();
+    await createAdminIfNotPresent();
+    await ensureContactIndexes();
+  } catch (error) {
+    logger.error("❌ Failed to initialize app:", error);
+    process.exit(1);
+  }
+});

@@ -1,0 +1,15 @@
+export { default as Package } from "./package.model";
+export { default as Itinerary } from "./itinerary.model";
+export { default as ShortItinerary } from "./shortItinerary.modal";
+export { default as Attraction } from "./attraction.model";
+export { default as Inclusion } from "./inclusion.model";
+export { default as Exclusion } from "./exclusion.mode";
+export { default as FixedDate } from "./fixedDate.model";
+export { default as Category } from "./category.model";
+export { default as SubCategory } from "./subcategory.model";
+export { default as PackageInfo } from "./packageinfo.model";
+export { default as Gallery } from "./gallery.model";
+export { default as HomeGallery } from "./home.gallery.model";
+export { default as PrivateTrip } from "./privateTrip.model";
+export { default as DetailedItinerary } from "./detailedItinerary.model";
+export { default as DetailedItineraryRequest } from "./detailedItineraryRequest.model";

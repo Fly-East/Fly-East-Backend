@@ -1,0 +1,45 @@
+import { Document, Types } from "mongoose";
+import { AddonsType } from "./addones.type";
+
+export const BookingStatus = {
+  PENDING: "pending",
+  CONFIRMED: "confirmed",
+  CANCELLED: "cancelled",
+  COMPLETED: "completed",
+} as const;
+export type BookingStatus = (typeof BookingStatus)[keyof typeof BookingStatus];
+export const PaymentStatus = {
+  PENDING: "pending",
+  PARTIAL: "partial",
+  PAID: "paid",
+  REFUNDED: "refunded",
+} as const;
+export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
+
+export interface BookingType extends Document {
+  bookingReference: string;
+  status: BookingStatus;
+  paymentStatus: PaymentStatus;
+  totalAmount: number;
+  currency: string;
+  totalPeople: number;
+  package: Types.ObjectId;
+  fixedDate: Types.ObjectId;
+  personalInfo: {
+    fullName: string;
+    email: string;
+    country: string;
+    phoneNumber: string;
+  }[];
+  arrivalDate?: Date;
+  departureDate?: Date;
+  message?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  cancelledAt?: Date;
+  cancellationReason?: string;
+  cancelledBy?: Types.ObjectId;
+  customizedBooking: boolean;
+  addons?:AddonsType;
+  seen: boolean;
+}
