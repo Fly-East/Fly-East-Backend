@@ -15,7 +15,7 @@ jobs:
       - name: Sync files to VPS
         uses: burnett01/rsync-deployments@7.0.2
         with:
-          switches: -avzr --delete --exclude=.git --exclude=node_modules
+          switches: -avzr --delete --exclude=.git --exclude=node_modules --exclude=.env
           path: ./
           remote_path: /var/www/fly-east-dev-server
           remote_host: ${{ secrets.VPS_HOST }}
