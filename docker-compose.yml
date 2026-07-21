@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: .
+    container_name: fly-east-dev-server
+
+    restart: unless-stopped
+
+    ports:
+      - "8001:3000"
+
+    env_file:
+      - .env
