@@ -1,12 +1,14 @@
 services:
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     container_name: fly-east-dev-server
 
     restart: unless-stopped
 
     ports:
-      - "8001:3000"
+      - "3000:9100"
 
     env_file:
       - .env
