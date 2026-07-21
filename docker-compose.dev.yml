@@ -9,6 +9,9 @@ services:
 
     ports:
       - "9100:3000"
+      
+    networks:
+      - backend-network
 
     env_file:
       - .env
