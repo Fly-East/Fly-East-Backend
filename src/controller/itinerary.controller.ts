@@ -2,11 +2,15 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { Itinerary } from "../models";
 import type { ItineraryDocument } from "../models/itinerary.model";
-import { uploadOnCloudinary } from "../utils/cloudinary";
+import { getPublicId, uploadOnCloudinary } from "../utils/cloudinary";
 import { populatePackage } from "../utils/populatePackage";
 import { Package } from "../models";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
+import { mediaService } from "../modules/media";
+import type { MediaType } from "../modules/media";
+import { cleanupCloudinaryUploads } from "../modules/shared";
+import type { CloudinaryUploadRef } from "../modules/shared";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -65,30 +69,125 @@ const shiftItinerarySortOrders = async (
     { session }
   );
 };
+
+type UploadedItineraryMedia = CloudinaryUploadRef & {
+  type: MediaType;
+  file: Express.Multer.File;
+  url: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+};
+
+const toCloudinaryResourceType = (
+  type: MediaType
+): NonNullable<CloudinaryUploadRef["resourceType"]> =>
+  type === "Video" ? "video" : "image";
+
+const getItineraryUploadFiles = (req: Request) => {
+  const files = req.files as
+    | { [fieldname: string]: Express.Multer.File[] }
+    | undefined;
+
+  return {
+    images: files?.image ?? [],
+    videos: files?.video ?? [],
+  };
+};
+
+const uploadItineraryFiles = async (
+  files: Express.Multer.File[],
+  type: MediaType
+): Promise<UploadedItineraryMedia[]> => {
+  const uploaded: UploadedItineraryMedia[] = [];
+
+  for (const file of files) {
+    const upload = await uploadOnCloudinary(file.buffer, {
+      filename: file.originalname,
+      contentType: file.mimetype,
+    });
+
+    if (!upload?.url || !upload.public_id) {
+      throw new Error(`Failed to upload ${type.toLowerCase()}: ${file.originalname}`);
+    }
+
+    uploaded.push({
+      type,
+      file,
+      url: upload.secure_url || upload.url,
+      publicId: upload.public_id,
+      resourceType: toCloudinaryResourceType(type),
+      width: upload.width,
+      height: upload.height,
+      duration: upload.duration,
+    });
+  }
+
+  return uploaded;
+};
+
+const buildMediaPayloads = (
+  uploads: UploadedItineraryMedia[],
+  itineraryId: string
+) =>
+  uploads.map((item) => ({
+    type: item.type,
+    owner: {
+      type: "Itinerary" as const,
+      id: itineraryId,
+    },
+    provider: "cloudinary" as const,
+    url: item.url,
+    publicId: item.publicId,
+    originalName: item.file.originalname,
+    mimeType: item.file.mimetype,
+    size: item.file.size,
+    ...(item.width !== undefined && { width: item.width }),
+    ...(item.height !== undefined && { height: item.height }),
+    ...(item.duration !== undefined && { duration: item.duration }),
+  }));
+
+const attachMediaToItineraries = async <
+  T extends { _id?: mongoose.Types.ObjectId | string }
+>(
+  itineraries: T[]
+) => {
+  if (itineraries.length === 0) {
+    return [];
+  }
+
+  const ownerIds = itineraries
+    .map((item) => item._id?.toString())
+    .filter((id): id is string => Boolean(id));
+
+  const mediaItems = await mediaService.getMediaByOwnerIds({
+    ownerIds,
+    ownerType: "Itinerary",
+  });
+
+  const mediaByOwnerId = new Map<string, typeof mediaItems>();
+
+  for (const media of mediaItems) {
+    const ownerId = media.owner.id.toString();
+    const existing = mediaByOwnerId.get(ownerId) ?? [];
+    existing.push(media);
+    mediaByOwnerId.set(ownerId, existing);
+  }
+
+  return itineraries.map((itinerary) => ({
+    ...itinerary,
+    media: mediaByOwnerId.get(itinerary._id?.toString() ?? "") ?? [],
+  }));
+};
+
 // Create itinerary
 export const createItinerary = async (req: Request, res: Response) => {
+  const uploadedMedia: UploadedItineraryMedia[] = [];
+  let transactionCommitted = false;
+
   try {
     const { packageId } = req.params;
     const itineraryData = req.body;
-
-    if (req.files && Array.isArray(req.files)) {
-      const uploadedImages: string[] = [];
-
-      for (const file of req.files as Express.Multer.File[]) {
-        try {
-          const upload = await uploadOnCloudinary(file.buffer, {
-            filename: file.originalname,
-            contentType: file.mimetype,
-          });
-          if (upload?.url) uploadedImages.push(upload.url);
-        } catch (error) {
-          throw new Error(`Failed to upload image: ${file.originalname}`);
-        }
-      }
-
-      // Save images as an array
-      itineraryData.images = uploadedImages;
-    }
 
     if (!packageId) {
       return res.status(400).json({
@@ -97,13 +196,22 @@ export const createItinerary = async (req: Request, res: Response) => {
       });
     }
 
-    // Validate packageId is a valid ObjectId
     if (!mongoose.Types.ObjectId.isValid(packageId)) {
       return res.status(400).json({
         status: "error",
         message: "Invalid Package ID format",
       });
     }
+
+    const { images, videos } = getItineraryUploadFiles(req);
+    uploadedMedia.push(
+      ...(await uploadItineraryFiles(images, "Image")),
+      ...(await uploadItineraryFiles(videos, "Video"))
+    );
+
+    const imageUrls = uploadedMedia
+      .filter((item) => item.type === "Image")
+      .map((item) => item.url);
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -123,7 +231,6 @@ export const createItinerary = async (req: Request, res: Response) => {
         ...restData
       } = itineraryData;
 
-      // If sortOrder is not provided, is 0, or is NaN, find the max sortOrder and add 1
       let sortOrder =
         typeof req.body.sortOrder !== "undefined"
           ? Number(req.body.sortOrder)
@@ -135,6 +242,7 @@ export const createItinerary = async (req: Request, res: Response) => {
         isNaN(sortOrder)
       ) {
         const lastItinerary = await Itinerary.findOne({ package: packageId })
+          .session(session)
           .sort({ sortOrder: -1 })
           .select("sortOrder")
           .lean<{ sortOrder?: number }>();
@@ -145,7 +253,6 @@ export const createItinerary = async (req: Request, res: Response) => {
             : 1;
       }
 
-      // Shift existing slots to make room at the desired sort order
       await shiftItinerarySortOrders(
         packageId,
         { sortOrder: { $gte: sortOrder } },
@@ -161,7 +268,7 @@ export const createItinerary = async (req: Request, res: Response) => {
         ...(activity && { activity }),
         ...(meals && { meals }),
         ...(accommodation && { accommodation }),
-        ...(itineraryData.images && { images: itineraryData.images }), // save uploaded images
+        ...(imageUrls[0] && { image: imageUrls[0] }),
         sortOrder,
       });
 
@@ -169,13 +276,15 @@ export const createItinerary = async (req: Request, res: Response) => {
       packageDoc.itinerary.push(newItinerary._id);
       await packageDoc.save({ session });
 
-      await session.commitTransaction();
+      if (uploadedMedia.length > 0) {
+        await mediaService.createManyMedia(
+          buildMediaPayloads(uploadedMedia, newItinerary._id.toString()),
+          session
+        );
+      }
 
-      await Package.findByIdAndUpdate(
-        packageId,
-        { $addToSet: { itinerary: newItinerary._id } },
-        { session, new: true, runValidators: true, omitUndefined: true }
-      );
+      await session.commitTransaction();
+      transactionCommitted = true;
 
       const populatedItinerary = await populatePackage(newItinerary);
       await clearCacheByPrefix(`itineraries:${packageId}:`);
@@ -192,6 +301,9 @@ export const createItinerary = async (req: Request, res: Response) => {
       session.endSession();
     }
   } catch (error: any) {
+    if (!transactionCommitted) {
+      await cleanupCloudinaryUploads(uploadedMedia);
+    }
     logger.error("Error creating itinerary:", error);
     res.status(500).json({
       status: "error",
@@ -234,7 +346,8 @@ export const getItenaries = async (req: Request, res: Response) => {
         .lean(),
       Itinerary.countDocuments({ package: packageId }),
     ]);
-    const paginatedItineraries = itineraries;
+
+    const paginatedItineraries = await attachMediaToItineraries(itineraries);
 
     const totalPages = Math.ceil(total / limit);
     const hasNextPage = page < totalPages;
@@ -275,16 +388,19 @@ export const getItenaries = async (req: Request, res: Response) => {
 export const getItinerary = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const itinerary = await Itinerary.findById(id);
+    const itinerary = await Itinerary.findById(id).lean();
     if (!itinerary) {
       return res.status(404).json({
         status: "error",
         message: "Itinerary not found",
       });
     }
+
+    const [itineraryWithMedia] = await attachMediaToItineraries([itinerary]);
+
     res.status(200).json({
       status: "success",
-      data: itinerary,
+      data: itineraryWithMedia,
     });
   } catch (error: any) {
     logger.error("Error getting itinerary:", error);
@@ -297,23 +413,42 @@ export const getItinerary = async (req: Request, res: Response) => {
 
 // Update itinerary
 export const updateItinerary = async (req: Request, res: Response) => {
+  const uploadedMedia: UploadedItineraryMedia[] = [];
+  let transactionCommitted = false;
+  const obsoleteCloudinaryUploads: CloudinaryUploadRef[] = [];
+
   try {
     const { id } = req.params;
+
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid Itinerary ID format",
+      });
+    }
 
     const updates = {
       ...req.body,
     };
 
+    const { images, videos } = getItineraryUploadFiles(req);
+    uploadedMedia.push(
+      ...(await uploadItineraryFiles(images, "Image")),
+      ...(await uploadItineraryFiles(videos, "Video"))
+    );
+
+    const newImage = uploadedMedia.find((item) => item.type === "Image");
+    const newVideo = uploadedMedia.find((item) => item.type === "Video");
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      const itinerary = await Itinerary.findById(id);
+      const itinerary = await Itinerary.findById(id).session(session);
       if (!itinerary) {
         throw new Error("Itinerary not found");
       }
 
-      // Remove empty or undefined fields
       Object.keys(updates).forEach((key) => {
         if (updates[key] === undefined || updates[key] === "") {
           delete updates[key];
@@ -358,13 +493,74 @@ export const updateItinerary = async (req: Request, res: Response) => {
         }
       }
 
+      if (newImage) {
+        if (itinerary.image) {
+          const previousImagePublicId = getPublicId(itinerary.image);
+          if (previousImagePublicId) {
+            obsoleteCloudinaryUploads.push({
+              publicId: previousImagePublicId,
+              resourceType: "image",
+            });
+          }
+        }
+
+        const previousImageMedia = await mediaService.deleteByOwner({
+          ownerId: itinerary._id.toString(),
+          ownerType: "Itinerary",
+          type: "Image",
+          session,
+        });
+
+        for (const media of previousImageMedia) {
+          if (media.publicId) {
+            obsoleteCloudinaryUploads.push({
+              publicId: media.publicId,
+              resourceType: "image",
+            });
+          }
+        }
+
+        updates.image = newImage.url;
+      }
+
+      if (newVideo) {
+        const previousVideoMedia = await mediaService.deleteByOwner({
+          ownerId: itinerary._id.toString(),
+          ownerType: "Itinerary",
+          type: "Video",
+          session,
+        });
+
+        for (const media of previousVideoMedia) {
+          if (media.publicId) {
+            obsoleteCloudinaryUploads.push({
+              publicId: media.publicId,
+              resourceType: "video",
+            });
+          }
+        }
+      }
+
       Object.assign(itinerary, updates);
       await itinerary.save({ session });
 
+      const replacementUploads = [newImage, newVideo].filter(
+        (item): item is UploadedItineraryMedia => Boolean(item)
+      );
+
+      if (replacementUploads.length > 0) {
+        await mediaService.createManyMedia(
+          buildMediaPayloads(replacementUploads, itinerary._id.toString()),
+          session
+        );
+      }
+
       await session.commitTransaction();
+      transactionCommitted = true;
+
+      await cleanupCloudinaryUploads(obsoleteCloudinaryUploads);
 
       const populatedItinerary = await populatePackage(itinerary);
-      // Invalidate all itinerary cache for this package
       await clearCacheByPrefix(`itineraries:${itinerary.package}:`);
       await clearCacheByPrefix("");
       res.status(200).json({
@@ -379,6 +575,9 @@ export const updateItinerary = async (req: Request, res: Response) => {
       session.endSession();
     }
   } catch (error: any) {
+    if (!transactionCommitted) {
+      await cleanupCloudinaryUploads(uploadedMedia);
+    }
     logger.error("Error updating itinerary:", error);
     res.status(500).json({
       status: "error",

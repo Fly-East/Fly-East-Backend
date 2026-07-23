@@ -34,7 +34,7 @@ export const handleMulterError = (
   res: any,
   next: any
 ) => {
-  const allowedFileFields = ["coverImage", "routeMap"];
+  const allowedFileFields = ["coverImage", "routeMap", "image", "video"];
 
   if (err instanceof multer.MulterError) {
     let message = err.message;
