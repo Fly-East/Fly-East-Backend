@@ -302,8 +302,9 @@ app.all("*", (req: Request, res: Response, next: NextFunction) => {
 app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   res.status(err.statusCode || 500).json({
-    status: "error",
+    status: err.status || "error",
     message: err.message || "Internal Server Error",
+    ...(err.errors ? { errors: err.errors } : {}),
   });
 });
 

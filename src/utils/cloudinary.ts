@@ -76,9 +76,14 @@ const uploadOnCloudinary = async (file: string | Buffer, options?: UploadOptions
     return null;
   }
 };
-export const deleteImage = async (publicId: string) => {
+export const deleteImage = async (
+  publicId: string,
+  options?: { resourceType?: "image" | "video" | "raw" | "auto" }
+) => {
   try {
-    const result = await cloudinary.uploader.destroy(publicId);
+    const result = await cloudinary.uploader.destroy(publicId, {
+      resource_type: options?.resourceType ?? "image",
+    });
     return result;
   } catch (error) {
     logger.error("Error deleting image:", error);

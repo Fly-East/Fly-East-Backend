@@ -39,6 +39,7 @@ import {
   uploadOnCloudinary,
 } from "../utils/cloudinary";
 import { populatePackage } from "../utils/populatePackage";
+import { mediaService } from "../modules/media";
 import Testimonial from "../models/testimonial.model";
 import Faq from "../models/faq.model";
 import { Pax } from "../models/pax.model";
@@ -169,9 +170,18 @@ const buildPackagePayload = async (packageDoc: PackageDocument) => {
         activeReviews.length
       : null;
 
+  const itineraries = Array.isArray(packageData.itinerary)
+    ? packageData.itinerary
+    : [];
+
+  const itineraryWithMedia = await mediaService.attachMediaToItineraries(
+    itineraries
+  );
+
   return {
     ...packageData,
     ...extraFields,
+    itinerary: itineraryWithMedia,
     reviews: activeReviews,
     reviewCount: activeReviews.length,
     reviewAverage,

@@ -1,0 +1,127 @@
+import { ClientSession, Types } from "mongoose";
+import MediaRepository from "../repository/media.repository";
+import { IMedia } from "../types/media.types";
+import { MediaType } from "../constants/media.constants";
+import { createMediaSchema } from "../validation/media.validation";
+import { assertValid } from "../../shared";
+
+class MediaService {
+    constructor(private readonly mediaRepository: MediaRepository) {}
+
+    async createMedia(
+        media: unknown,
+        session?: ClientSession
+    ): Promise<IMedia> {
+        const validated = assertValid(createMediaSchema, media);
+        return this.mediaRepository.createMedia(validated, session);
+    }
+
+    async createManyMedia(
+        mediaItems: unknown[],
+        session?: ClientSession
+    ): Promise<IMedia[]> {
+        const validated = mediaItems.map((media) =>
+            assertValid(createMediaSchema, media)
+        );
+        return this.mediaRepository.createManyMedia(validated, session);
+    }
+
+    async getMediaById(id: string): Promise<IMedia | null> {
+        return this.mediaRepository.getMediaById(id);
+    }
+
+    async getMedia({
+        ownerId,
+        type,
+        typeId,
+    }: {
+        ownerId: string;
+        type?: IMedia["type"];
+        typeId?: string;
+    }): Promise<IMedia[]> {
+        return this.mediaRepository.getMedia({ ownerId, type, typeId });
+    }
+
+    async getMediaByOwnerIds({
+        ownerIds,
+        ownerType,
+        type,
+    }: {
+        ownerIds: string[];
+        ownerType: IMedia["owner"]["type"];
+        type?: IMedia["type"];
+    }): Promise<IMedia[]> {
+        return this.mediaRepository.getMediaByOwnerIds({
+            ownerIds,
+            ownerType,
+            type,
+        });
+    }
+
+    async deleteByOwner({
+        ownerId,
+        ownerType,
+        type,
+        session,
+    }: {
+        ownerId: string;
+        ownerType: IMedia["owner"]["type"];
+        type?: IMedia["type"];
+        session?: ClientSession;
+    }): Promise<IMedia[]> {
+        return this.mediaRepository.deleteByOwner({
+            ownerId,
+            ownerType,
+            type,
+            session,
+        });
+    }
+
+    /**
+     * Attaches media keyed by lowercase type (`image`, `video`) — one record per type.
+     */
+    async attachMediaToItineraries<
+        T extends { _id?: Types.ObjectId | string }
+    >(
+        itineraries: T[]
+    ): Promise<
+        Array<
+            T & {
+                media: Partial<Record<Lowercase<MediaType>, IMedia>>;
+            }
+        >
+    > {
+        if (itineraries.length === 0) {
+            return [];
+        }
+
+        const ownerIds = itineraries
+            .map((item) => item._id?.toString())
+            .filter((id): id is string => Boolean(id));
+
+        const mediaItems = await this.getMediaByOwnerIds({
+            ownerIds,
+            ownerType: "Itinerary",
+        });
+
+        const mediaByOwnerId = new Map<
+            string,
+            Partial<Record<Lowercase<MediaType>, IMedia>>
+        >();
+
+        for (const media of mediaItems) {
+            const ownerId = media.owner.id.toString();
+            const key = media.type.toLowerCase() as Lowercase<MediaType>;
+            const existing = mediaByOwnerId.get(ownerId) ?? {};
+            existing[key] = media;
+            mediaByOwnerId.set(ownerId, existing);
+        }
+
+        return itineraries.map((itinerary) => ({
+            ...itinerary,
+            media: mediaByOwnerId.get(itinerary._id?.toString() ?? "") ?? {},
+        }));
+    }
+}
+
+export default MediaService;
