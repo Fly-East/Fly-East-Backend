@@ -1,6 +1,7 @@
-import { ClientSession } from "mongoose";
+import { ClientSession, Types } from "mongoose";
 import MediaRepository from "../repository/media.repository";
 import { IMedia } from "../types/media.types";
+import { MediaType } from "../constants/media.constants";
 import { createMediaSchema } from "../validation/media.validation";
 import { assertValid } from "../../shared";
 
@@ -74,6 +75,52 @@ class MediaService {
             type,
             session,
         });
+    }
+
+    /**
+     * Attaches media keyed by lowercase type (`image`, `video`) — one record per type.
+     */
+    async attachMediaToItineraries<
+        T extends { _id?: Types.ObjectId | string }
+    >(
+        itineraries: T[]
+    ): Promise<
+        Array<
+            T & {
+                media: Partial<Record<Lowercase<MediaType>, IMedia>>;
+            }
+        >
+    > {
+        if (itineraries.length === 0) {
+            return [];
+        }
+
+        const ownerIds = itineraries
+            .map((item) => item._id?.toString())
+            .filter((id): id is string => Boolean(id));
+
+        const mediaItems = await this.getMediaByOwnerIds({
+            ownerIds,
+            ownerType: "Itinerary",
+        });
+
+        const mediaByOwnerId = new Map<
+            string,
+            Partial<Record<Lowercase<MediaType>, IMedia>>
+        >();
+
+        for (const media of mediaItems) {
+            const ownerId = media.owner.id.toString();
+            const key = media.type.toLowerCase() as Lowercase<MediaType>;
+            const existing = mediaByOwnerId.get(ownerId) ?? {};
+            existing[key] = media;
+            mediaByOwnerId.set(ownerId, existing);
+        }
+
+        return itineraries.map((itinerary) => ({
+            ...itinerary,
+            media: mediaByOwnerId.get(itinerary._id?.toString() ?? "") ?? {},
+        }));
     }
 }
 

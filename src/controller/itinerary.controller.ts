@@ -147,38 +147,11 @@ const buildMediaPayloads = (
     ...(item.duration !== undefined && { duration: item.duration }),
   }));
 
-const attachMediaToItineraries = async <
+const attachMediaToItineraries = <
   T extends { _id?: mongoose.Types.ObjectId | string }
 >(
   itineraries: T[]
-) => {
-  if (itineraries.length === 0) {
-    return [];
-  }
-
-  const ownerIds = itineraries
-    .map((item) => item._id?.toString())
-    .filter((id): id is string => Boolean(id));
-
-  const mediaItems = await mediaService.getMediaByOwnerIds({
-    ownerIds,
-    ownerType: "Itinerary",
-  });
-
-  const mediaByOwnerId = new Map<string, typeof mediaItems>();
-
-  for (const media of mediaItems) {
-    const ownerId = media.owner.id.toString();
-    const existing = mediaByOwnerId.get(ownerId) ?? [];
-    existing.push(media);
-    mediaByOwnerId.set(ownerId, existing);
-  }
-
-  return itineraries.map((itinerary) => ({
-    ...itinerary,
-    media: mediaByOwnerId.get(itinerary._id?.toString() ?? "") ?? [],
-  }));
-};
+) => mediaService.attachMediaToItineraries(itineraries);
 
 // Create itinerary
 export const createItinerary = async (req: Request, res: Response) => {
