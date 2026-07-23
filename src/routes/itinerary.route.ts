@@ -13,11 +13,13 @@ const router = Router();
 
 // Configure multer for single image field
 const uploadMiddleware = upload.single("image");
+const uploadVideoMiddleware = upload.single("video");
 
 // Create itinerary
 router.post(
   "/api/v1/itinerary/:packageId",
   uploadMiddleware,
+  uploadVideoMiddleware,
   handleMulterError,
   isAdmin,
   checkPermissions(["create"]),

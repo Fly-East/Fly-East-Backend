@@ -1,29 +1,40 @@
 import { Types } from "mongoose";
+import { z } from "zod";
+import {
+    MediaOwnerType,
+    MediaProvider,
+    MediaType,
+} from "../constants/media.constants";
+import { createMediaSchema } from "../validation/media.validation";
 
-export interface IMedia {
-  title?: string;
+interface IMedia {
+    title?: string;
 
-  type: "Image" | "Video";
+    type: MediaType;
 
-  owner: {
-    type: "Itinerary";
-    id: Types.ObjectId;
-  };
+    owner: {
+        type: MediaOwnerType;
+        id: Types.ObjectId;
+    };
 
-  provider: "cloudinary" | "cdn";
+    provider: MediaProvider;
 
-  url: string;
+    url: string;
 
-  publicId?: string;
+    publicId?: string;
 
-  originalName: string;
-  mimeType: string;
-  size: number;
+    originalName: string;
+    mimeType: string;
+    size: number;
 
-  height?: number;
-  width?: number;
-  duration?: number;
+    height?: number;
+    width?: number;
+    duration?: number;
 
-  createdAt?: Date;
-  updatedAt?: Date;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
+
+type CreateMediaInput = z.infer<typeof createMediaSchema>;
+
+export { IMedia, CreateMediaInput };
