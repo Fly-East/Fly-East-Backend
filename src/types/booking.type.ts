@@ -1,5 +1,4 @@
 import { Document, Types } from "mongoose";
-import { AddonsType } from "./addones.type";
 
 export const BookingStatus = {
   PENDING: "pending",
@@ -40,6 +39,6 @@ export interface BookingType extends Document {
   cancellationReason?: string;
   cancelledBy?: Types.ObjectId;
   customizedBooking: boolean;
-  addons?:AddonsType;
+  addons?: Types.ObjectId[];
   seen: boolean;
 }

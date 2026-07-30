@@ -1,12 +1,16 @@
 import { Router } from "express";
-import { checkPermissions, isAdmin } from "../middleware/isAdmin";
-import { upload } from "../middleware/multer.middleware";
-import { createAddon, deleteAddon, getAddonById, getAllAddons, updateAddon } from "../controller/addONService.controller";
-
+import { checkPermissions, isAdmin } from "../../../middleware/isAdmin";
+import { upload } from "../../../middleware/multer.middleware";
+import {
+  createAddon,
+  deleteAddon,
+  getAddonById,
+  getCatalogAddons,
+  updateAddon,
+} from "../controller/addons.controller";
 
 const router = Router();
 
-// Configure multer upload with proper error handling
 const handleUpload = (req: any, res: any, next: any) => {
   const uploadSingle = upload.single("image");
 
@@ -21,7 +25,6 @@ const handleUpload = (req: any, res: any, next: any) => {
   });
 };
 
-// Create a new addon for a specific package
 router.post(
   "/api/v1/addons/",
   isAdmin,
@@ -30,13 +33,10 @@ router.post(
   createAddon
 );
 
-// Get all addons for a specific package
-router.get("/api/v1/addons/package/:packageId", getAllAddons);
+router.get("/api/v1/addons/", getCatalogAddons);
 
-// Get a single addon by ID within a specific package
 router.get("/api/v1/addons/:addonId", getAddonById);
 
-// Update an addon by ID within a specific package
 router.put(
   "/api/v1/addons/:addonId",
   checkPermissions(["edit"]),
@@ -44,7 +44,6 @@ router.put(
   updateAddon
 );
 
-// Delete an addon by ID within a specific package
 router.delete(
   "/api/v1/addons/:addonId",
   isAdmin,

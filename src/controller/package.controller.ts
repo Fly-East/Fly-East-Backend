@@ -48,7 +48,7 @@ import TripHighlight from "../models/triphighlights";
 import VisitPlace from "../models/visit-place.model";
 import Requirement from "../models/requirement.mode";
 import Gallery from "../models/gallery.model";
-import Addons from "../models/addOnService.model";
+import { PackageAddon } from "../modules/package-addons";
 import SeasonalTrek from "../models/basedSeasonal.model";
 import Gear from "../models/gear.model";
 import ImportantInformation from "../models/importantInformation.model";
@@ -149,7 +149,12 @@ const buildPackagePayload = async (packageDoc: PackageDocument) => {
     isActive: true,
   }).sort({ sortOrder: -1 });
 
-  const addons = await Addons.find({ packageId: populatedPackage._id });
+  const addons = await PackageAddon.find({
+    package: populatedPackage._id,
+    isActive: true,
+  })
+    .populate("addon")
+    .sort({ sortOrder: 1 });
 
   const fixedDates = await getFixedDatesForPackage(populatedPackage._id);
 
@@ -862,7 +867,7 @@ export const deletePackage = async (req: Request, res: Response) => {
       FixedDate.deleteMany({ package: req.params.id }).session(session),
       Testimonial.deleteMany({ package: req.params.id }).session(session),
       Faq.deleteMany({ package: req.params.id }).session(session),
-      Addons.deleteMany({ package: req.params.id }).session(session),
+      PackageAddon.deleteMany({ package: req.params.id }).session(session),
       Pax.deleteMany({ package: req.params.id }).session(session),
       TripHighlight.deleteMany({ package: req.params.id }).session(session),
       VisitPlace.deleteMany({ package: req.params.id }).session(session),

@@ -7,7 +7,7 @@ import { calculateTotalWithDiscount } from "../utils/calculateDiscount";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 import { FixedDate } from "../models";
-import Addons from "../models/addOnService.model";
+import { PackageAddon } from "../modules/package-addons";
 import FixedDateModel from "../models/fixedDate.model";
 import { sendEmail } from "../modules/email";
 import { dynamicNumber } from "../templates/invoiceTemplate";
@@ -101,28 +101,50 @@ const createBooking = async (req: Request, res: Response) => {
       return result;
     };
 
-    // Validate addons if provided
-    let addonIds: Types.ObjectId[] = [];
+    // Resolve package offers: selected addons + defaults (once per booking)
+    const packageOffers = await PackageAddon.find({
+      package: packageId,
+      isActive: true,
+    }).populate("addon");
+
+    const activeOffers = packageOffers.filter((offer) => {
+      const catalog = offer.addon as any;
+      return catalog && !catalog.isDeleted && catalog.isActive !== false;
+    });
+
+    const offerByAddonId = new Map(
+      activeOffers.map((offer) => [offer.addon._id.toString(), offer])
+    );
+
+    let selectedAddonIds: Types.ObjectId[] = [];
     if (addons && Array.isArray(addons)) {
-      addonIds = addons.map((addon: any) =>
+      selectedAddonIds = addons.map((addon: any) =>
         typeof addon === "string"
           ? new Types.ObjectId(addon)
           : new Types.ObjectId(addon._id || addon.addonId || addon.id)
       );
 
-      const existingAddons = await Addons.find({ _id: { $in: addonIds } });
-      if (existingAddons.length !== addonIds.length) {
-        const existingIds = existingAddons.map((addon) => addon._id.toString());
-        const missingAddons = addonIds.filter(
-          (id) => !existingIds.includes(id.toString())
-        );
+      const missingAddons = selectedAddonIds.filter(
+        (id) => !offerByAddonId.has(id.toString())
+      );
+      if (missingAddons.length > 0) {
         return res.status(400).json({
           status: "fail",
-          message: "One or more addons not found",
+          message: "One or more addons are not available for this package",
           missingAddons: missingAddons.map((id) => id.toString()),
         });
       }
     }
+
+    const defaultAddonIds = activeOffers
+      .filter((offer) => offer.isDefault)
+      .map((offer) => offer.addon._id as Types.ObjectId);
+
+    const addonIdSet = new Set<string>([
+      ...selectedAddonIds.map((id) => id.toString()),
+      ...defaultAddonIds.map((id) => id.toString()),
+    ]);
+    const addonIds = [...addonIdSet].map((id) => new Types.ObjectId(id));
 
     // Validate fixed date and seat availability
     const fixedDate = await FixedDate.findById(fixedDateId);
@@ -392,7 +414,7 @@ export const getAllBookings = async (req: Request, res: Response) => {
           select: "name duration pax location overview coverImage",
           populate: { path: "pax", select: "min max discount" },
         })
-        .populate("addons", "name price")
+        .populate("addons", "name description")
         .populate({
           path: "fixedDate",
           select:
@@ -442,7 +464,7 @@ const getBookingById = async (req: Request, res: Response) => {
   try {
     const booking = await Booking.findById(req.params.id)
       .populate("package", "name duration")
-      .populate("addons", "name price description")
+      .populate("addons", "name description")
       .populate({
         path: "fixedDate",
         select:
@@ -490,7 +512,7 @@ const updateBookingStatus = async (req: Request, res: Response) => {
     })
       .populate("package")
       .populate("createdBy", "name email")
-      .populate("addons", "name price description");
+      .populate("addons", "name description");
 
     if (!booking) {
       return res.status(404).json({ message: "Booking not found" });
