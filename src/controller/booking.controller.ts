@@ -136,12 +136,21 @@ const createBooking = async (req: Request, res: Response) => {
       }
     }
 
-    const defaultAddonIds = activeOffers
-      .filter((offer) => offer.isDefault)
-      .map((offer) => offer.addon._id as Types.ObjectId);
+    const defaultOffers = activeOffers.filter((offer) => offer.isDefault);
+    const defaultAddonIds = defaultOffers.map(
+      (offer) => offer.addon._id as Types.ObjectId
+    );
+    const defaultAddonIdSet = new Set(
+      defaultAddonIds.map((id) => id.toString())
+    );
+
+    // Defaults are always included server-side; client cannot omit or control them
+    const optionalSelectedIds = selectedAddonIds.filter(
+      (id) => !defaultAddonIdSet.has(id.toString())
+    );
 
     const addonIdSet = new Set<string>([
-      ...selectedAddonIds.map((id) => id.toString()),
+      ...optionalSelectedIds.map((id) => id.toString()),
       ...defaultAddonIds.map((id) => id.toString()),
     ]);
     const addonIds = [...addonIdSet].map((id) => new Types.ObjectId(id));
