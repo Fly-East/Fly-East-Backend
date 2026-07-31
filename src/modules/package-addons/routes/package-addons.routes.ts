@@ -4,6 +4,7 @@ import {
   createPackageAddon,
   deletePackageAddon,
   getAllAddons,
+  getAllPackageAddons,
   getPackageAddonById,
   updatePackageAddon,
 } from "../controller/package-addons.controller";
@@ -12,6 +13,8 @@ const router = Router();
 
 // Kept under /addons/package for backward compatibility
 router.get("/api/v1/addons/package/:packageId", getAllAddons);
+
+router.get("/api/v1/package-addons/", getAllPackageAddons);
 
 router.post(
   "/api/v1/package-addons/",

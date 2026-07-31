@@ -49,6 +49,40 @@ export const createPackageAddon = async (req: Request, res: Response) => {
   }
 };
 
+export const getAllPackageAddons = async (req: Request, res: Response) => {
+  try {
+    const { packageId } = req.query;
+
+    if (
+      packageId !== undefined &&
+      (typeof packageId !== "string" ||
+        !mongoose.Types.ObjectId.isValid(packageId))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid package ID format",
+      });
+    }
+
+    const packageAddons = await packageAddonsService.getAll({
+      packageId: typeof packageId === "string" ? packageId : undefined,
+    });
+
+    res.status(200).json({
+      success: true,
+      count: packageAddons.length,
+      data: packageAddons,
+    });
+  } catch (error) {
+    logger.error("Error fetching all package addons:", error);
+    res.status(getErrorStatus(error)).json({
+      success: false,
+      message: "Failed to fetch package addons",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
 export const getAllAddons = async (req: Request, res: Response) => {
   try {
     const { packageId } = req.params;

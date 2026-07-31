@@ -12,12 +12,85 @@ const toBoolean = (value: unknown, fallback?: boolean): boolean => {
   return value === true || value === "true";
 };
 
+const toPositiveInt = (value: unknown, fallback: number): number => {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+};
+
+const toOptionalPositiveInt = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return null;
+  }
+  return Math.floor(parsed);
+};
+
+const validateQuantities = (input: {
+  isDefault?: boolean;
+  defaultQuantity?: number;
+  maxQuantity?: number | null;
+}) => {
+  const isDefault = input.isDefault ?? false;
+  const defaultQuantity = isDefault
+    ? toPositiveInt(input.defaultQuantity, 1)
+    : 1;
+  const maxQuantity = toOptionalPositiveInt(input.maxQuantity);
+
+  if (isDefault && defaultQuantity < 1) {
+    throw Object.assign(new Error("defaultQuantity must be at least 1"), {
+      statusCode: 400,
+    });
+  }
+
+  if (maxQuantity !== null && isDefault && defaultQuantity > maxQuantity) {
+    throw Object.assign(
+      new Error("defaultQuantity cannot exceed maxQuantity"),
+      { statusCode: 400 }
+    );
+  }
+
+  return { defaultQuantity, maxQuantity };
+};
+
+const assertPricingCompatibleWithAddon = (
+  addon: {
+    costsParticipants?: boolean;
+    participantsPerQuantity?: number;
+  },
+  pricingType: string
+) => {
+  const costsParticipants = addon.costsParticipants === true;
+  const hasParticipants = (addon.participantsPerQuantity ?? 0) > 0;
+
+  // perPerson + costsParticipants is allowed;
+  // blocked only when all three apply: costs participants, has participants, and perPerson
+  if (costsParticipants && hasParticipants && pricingType === "perPerson") {
+    throw Object.assign(
+      new Error(
+        "Addons that cost participants and define participants cannot use perPerson pricing"
+      ),
+      { statusCode: 400 }
+    );
+  }
+};
+
 export type CreatePackageAddonInput = {
   packageId: string;
   addonId: string;
   price: unknown;
   pricingType: string;
   isDefault?: unknown;
+  defaultQuantity?: unknown;
+  maxQuantity?: unknown;
   isActive?: unknown;
   sortOrder?: unknown;
 };
@@ -26,6 +99,8 @@ export type UpdatePackageAddonInput = {
   price?: unknown;
   pricingType?: string;
   isDefault?: unknown;
+  defaultQuantity?: unknown;
+  maxQuantity?: unknown;
   isActive?: unknown;
   sortOrder?: unknown;
   addonId?: string;
@@ -41,6 +116,8 @@ class PackageAddonsService {
       price,
       pricingType,
       isDefault,
+      defaultQuantity,
+      maxQuantity,
       isActive,
       sortOrder,
     } = input;
@@ -80,6 +157,15 @@ class PackageAddonsService {
       throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
     }
 
+    assertPricingCompatibleWithAddon(addon, pricingType);
+
+    const resolvedIsDefault = toBoolean(isDefault);
+    const quantities = validateQuantities({
+      isDefault: resolvedIsDefault,
+      defaultQuantity: toPositiveInt(defaultQuantity, 1),
+      maxQuantity: toOptionalPositiveInt(maxQuantity),
+    });
+
     let resolvedSortOrder =
       sortOrder !== undefined ? Number(sortOrder) : undefined;
     if (resolvedSortOrder === undefined || Number.isNaN(resolvedSortOrder)) {
@@ -95,7 +181,9 @@ class PackageAddonsService {
         addon: addonId,
         price: Number(price),
         pricingType,
-        isDefault: toBoolean(isDefault),
+        isDefault: resolvedIsDefault,
+        defaultQuantity: quantities.defaultQuantity,
+        maxQuantity: quantities.maxQuantity,
         isActive: toBoolean(isActive, true),
         sortOrder: resolvedSortOrder,
       });
@@ -115,6 +203,18 @@ class PackageAddonsService {
       }
       throw error;
     }
+  }
+
+  async getAll(filters?: { packageId?: string }): Promise<IPackageAddon[]> {
+    const query: Record<string, unknown> = {};
+    if (filters?.packageId) {
+      query.package = filters.packageId;
+    }
+
+    return PackageAddon.find(query)
+      .populate("addon")
+      .populate("package", "name")
+      .sort({ sortOrder: 1, createdAt: -1 });
   }
 
   async getByPackageId(packageId: string): Promise<IPackageAddon[]> {
@@ -145,7 +245,7 @@ class PackageAddonsService {
     packageAddonId: string,
     input: UpdatePackageAddonInput
   ): Promise<IPackageAddon> {
-    const { price, pricingType, isDefault, isActive, sortOrder, addonId } =
+    const { price, pricingType, isDefault, defaultQuantity, maxQuantity, isActive, sortOrder, addonId } =
       input;
 
     if (
@@ -170,6 +270,42 @@ class PackageAddonsService {
       }
     }
 
+    const existing = await PackageAddon.findById(packageAddonId);
+    if (!existing) {
+      throw Object.assign(new Error("Package addon not found"), {
+        statusCode: 404,
+      });
+    }
+
+    const resolvedAddonId =
+      addonId !== undefined ? addonId : String(existing.addon);
+    const resolvedPricingType =
+      pricingType !== undefined ? pricingType : existing.pricingType;
+
+    const catalogAddon = await Addons.findOne({
+      _id: resolvedAddonId,
+      isDeleted: false,
+    });
+    if (!catalogAddon) {
+      throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
+    }
+    assertPricingCompatibleWithAddon(catalogAddon, resolvedPricingType);
+
+    const resolvedIsDefault =
+      isDefault !== undefined ? toBoolean(isDefault) : existing.isDefault;
+    const resolvedMaxQuantity =
+      maxQuantity !== undefined
+        ? toOptionalPositiveInt(maxQuantity)
+        : existing.maxQuantity;
+    const quantities = validateQuantities({
+      isDefault: resolvedIsDefault,
+      defaultQuantity:
+        defaultQuantity !== undefined
+          ? toPositiveInt(defaultQuantity, existing.defaultQuantity)
+          : existing.defaultQuantity,
+      maxQuantity: resolvedMaxQuantity,
+    });
+
     try {
       const updated = await PackageAddon.findOneAndUpdate(
         { _id: packageAddonId },
@@ -177,8 +313,10 @@ class PackageAddonsService {
           ...(price !== undefined && { price: Number(price) }),
           ...(pricingType !== undefined && { pricingType }),
           ...(isDefault !== undefined && {
-            isDefault: toBoolean(isDefault),
+            isDefault: resolvedIsDefault,
           }),
+          defaultQuantity: quantities.defaultQuantity,
+          maxQuantity: quantities.maxQuantity,
           ...(isActive !== undefined && {
             isActive: toBoolean(isActive),
           }),

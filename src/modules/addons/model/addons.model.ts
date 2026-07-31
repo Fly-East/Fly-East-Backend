@@ -12,10 +12,6 @@ const AddonsSchema = new Schema<IAddons>(
       type: String,
       required: true,
     },
-    image: {
-      type: String,
-      trim: true,
-    },
     slug: {
       type: String,
       unique: true,
@@ -23,6 +19,10 @@ const AddonsSchema = new Schema<IAddons>(
       required: true,
     },
     allowsQuantity: {
+      type: Boolean,
+      default: false,
+    },
+    costsParticipants: {
       type: Boolean,
       default: false,
     },

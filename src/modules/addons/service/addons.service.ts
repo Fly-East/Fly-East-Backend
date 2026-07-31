@@ -1,8 +1,3 @@
-import {
-  deleteImage,
-  getPublicId,
-  uploadOnCloudinary,
-} from "../../../utils/cloudinary";
 import { clearCacheByPrefix } from "../../../utils/redis";
 import { PackageAddon } from "../../package-addons/model/package-addons.model";
 import { Addons } from "../model/addons.model";
@@ -27,9 +22,10 @@ export type CreateAddonInput = {
   description: string;
   slug?: string;
   allowsQuantity?: unknown;
+  costsParticipants?: unknown;
   participantsPerQuantity?: unknown;
   isActive?: unknown;
-  file?: Express.Multer.File;
+  sortOrder?: unknown;
 };
 
 export type UpdateAddonInput = {
@@ -37,15 +33,15 @@ export type UpdateAddonInput = {
   description?: string;
   slug?: string;
   allowsQuantity?: unknown;
+  costsParticipants?: unknown;
   participantsPerQuantity?: unknown;
   isActive?: unknown;
   sortOrder?: unknown;
-  file?: Express.Multer.File;
 };
 
 class AddonsService {
   async createAddon(input: CreateAddonInput): Promise<IAddons> {
-    const { name, description, slug, file } = input;
+    const { name, description, slug } = input;
 
     if (!name || !description) {
       throw Object.assign(new Error("Name and description are required"), {
@@ -53,41 +49,30 @@ class AddonsService {
       });
     }
 
-    if (!file) {
-      throw Object.assign(
-        new Error(
-          "Image is required. Please make sure to send the file with field name 'image' in form-data"
-        ),
-        { statusCode: 400 }
-      );
-    }
-
     const lastAddon = await Addons.findOne().sort({ sortOrder: -1 });
-    const sortOrder = lastAddon ? lastAddon.sortOrder + 1 : 0;
-
-    const base64Data = file.buffer.toString("base64");
-    const dataURI = `data:${file.mimetype};base64,${base64Data}`;
-    const uploadImageResult = await uploadOnCloudinary(dataURI);
-
-    if (!uploadImageResult?.secure_url) {
-      throw Object.assign(new Error("Failed to upload image to Cloudinary"), {
-        statusCode: 400,
-      });
-    }
+    const sortOrder =
+      input.sortOrder !== undefined
+        ? Number(input.sortOrder)
+        : lastAddon
+          ? lastAddon.sortOrder + 1
+          : 0;
 
     const resolvedSlug =
       (typeof slug === "string" && slug.trim()) ||
       `${slugify(name)}-${Date.now()}`;
 
+    const costsParticipants = toBoolean(input.costsParticipants);
+    const participantsPerQuantity = input.participantsPerQuantity
+      ? Number(input.participantsPerQuantity)
+      : 0;
+
     const savedAddon = await Addons.create({
       name,
       description,
-      image: uploadImageResult.secure_url,
       slug: resolvedSlug,
       allowsQuantity: toBoolean(input.allowsQuantity),
-      participantsPerQuantity: input.participantsPerQuantity
-        ? Number(input.participantsPerQuantity)
-        : 0,
+      costsParticipants,
+      participantsPerQuantity,
       isActive: toBoolean(input.isActive, true),
       sortOrder,
     });
@@ -119,23 +104,28 @@ class AddonsService {
       throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
     }
 
-    let imageUrl = existingAddon.image;
-    if (input.file?.buffer) {
-      const base64Data = input.file.buffer.toString("base64");
-      const dataURI = `data:${input.file.mimetype};base64,${base64Data}`;
-      const uploadImageResult = await uploadOnCloudinary(dataURI);
-      if (!uploadImageResult?.secure_url) {
-        throw Object.assign(new Error("Failed to upload image"), {
-          statusCode: 400,
-        });
+    const nextCostsParticipants =
+      input.costsParticipants !== undefined
+        ? toBoolean(input.costsParticipants)
+        : existingAddon.costsParticipants;
+    const nextParticipants =
+      input.participantsPerQuantity !== undefined
+        ? Number(input.participantsPerQuantity)
+        : existingAddon.participantsPerQuantity;
+
+    if (nextCostsParticipants && nextParticipants > 0) {
+      const conflictingOffer = await PackageAddon.findOne({
+        addon: addonId,
+        pricingType: "perPerson",
+      });
+      if (conflictingOffer) {
+        throw Object.assign(
+          new Error(
+            "Cannot set costsParticipants with participants while package offers use perPerson pricing. Change those offers first."
+          ),
+          { statusCode: 400 }
+        );
       }
-      if (existingAddon.image) {
-        const publicId = await getPublicId(existingAddon.image);
-        if (publicId) {
-          await deleteImage(publicId);
-        }
-      }
-      imageUrl = uploadImageResult.secure_url;
     }
 
     const updatedAddon = await Addons.findOneAndUpdate(
@@ -146,9 +136,11 @@ class AddonsService {
           description: input.description,
         }),
         ...(input.slug !== undefined && { slug: input.slug }),
-        ...(imageUrl !== undefined && { image: imageUrl }),
         ...(input.allowsQuantity !== undefined && {
           allowsQuantity: toBoolean(input.allowsQuantity),
+        }),
+        ...(input.costsParticipants !== undefined && {
+          costsParticipants: toBoolean(input.costsParticipants),
         }),
         ...(input.participantsPerQuantity !== undefined && {
           participantsPerQuantity: Number(input.participantsPerQuantity),

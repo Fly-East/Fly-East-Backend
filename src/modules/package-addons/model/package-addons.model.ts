@@ -30,6 +30,16 @@ const PackageAddonSchema = new Schema<IPackageAddon>(
       type: Boolean,
       default: false,
     },
+    defaultQuantity: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    maxQuantity: {
+      type: Number,
+      default: null,
+      min: 1,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -44,7 +54,7 @@ const PackageAddonSchema = new Schema<IPackageAddon>(
   }
 );
 
-PackageAddonSchema.index({ package: 1, addon: 1 }, { unique: true });
+PackageAddonSchema.index({ package: 1, addon: 1, pricingType: 1 }, { unique: true });
 PackageAddonSchema.index({ package: 1, isActive: 1, sortOrder: 1 });
 
 export const PackageAddon = model<IPackageAddon>(

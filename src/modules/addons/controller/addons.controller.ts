@@ -17,10 +17,7 @@ const getErrorStatus = (error: unknown, fallback = 500) => {
 
 export const createAddon = async (req: Request, res: Response) => {
   try {
-    const savedAddon = await addonsService.createAddon({
-      ...req.body,
-      file: (req as any)?.file,
-    });
+    const savedAddon = await addonsService.createAddon(req.body);
 
     res.status(201).json({
       success: true,
@@ -95,10 +92,7 @@ export const updateAddon = async (req: Request, res: Response) => {
       });
     }
 
-    const updatedAddon = await addonsService.updateAddon(addonId, {
-      ...req.body,
-      file: (req as any)?.file,
-    });
+    const updatedAddon = await addonsService.updateAddon(addonId, req.body);
 
     res.status(200).json({
       success: true,

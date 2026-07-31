@@ -1,5 +1,5 @@
 export const ADDON_PRICING_TYPES = {
-  PER_PACKAGE: "perPackage",
+  PER_PERSON: "perPerson",
   PER_DAY: "perDay",
   PER_BOOKING: "perBooking",
 } as const;
@@ -15,7 +15,7 @@ export const ADDON_PRICING_TYPE_OPTIONS: {
   title: string;
   value: AddonPricingType;
 }[] = [
-  { title: "Per Package", value: ADDON_PRICING_TYPES.PER_PACKAGE },
+  { title: "Per Person", value: ADDON_PRICING_TYPES.PER_PERSON },
   { title: "Per Day", value: ADDON_PRICING_TYPES.PER_DAY },
   { title: "Per Booking", value: ADDON_PRICING_TYPES.PER_BOOKING },
 ];
