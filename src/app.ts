@@ -65,7 +65,8 @@ import gearRoutes from "./routes/gears.routes";
 import importantNotice from "./routes/importantNotice.route";
 import insurance from "./routes/insurance.route";
 import WhyLoveThisTrek from "./routes/whyLoveThisTrek.route";
-import Addons from "./routes/addOnServices.route";
+import { addonsRoutes } from "./modules/addons";
+import { packageAddonsRoutes } from "./modules/package-addons";
 import basedSeason from "./routes/seasonInfo.routes";
 import captchaRoute from "./routes/captcha.route";
 import privateTripRoute from "./routes/privateTrip.route";
@@ -248,7 +249,8 @@ app.use(
   gearRoutes,
   captchaRoute,
   video,
-  Addons,
+  packageAddonsRoutes,
+  addonsRoutes,
   privateTripRoute
 );
 
