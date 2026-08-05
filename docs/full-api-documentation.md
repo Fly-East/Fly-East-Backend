@@ -54,6 +54,12 @@ This document describes every major API interaction, the payload that you must s
 - `POST /api/v1/users/forgot-password` – send `{ email }`.
 - `POST /api/v1/users/reset-password` – query `token`, `email`; body `{ newPassword }`.
 
+### Admin password recovery
+- `POST /api/v1/users/admin/forgot-password` – send `{ email }`. Allowed roles: `admin`, `editor`, `super-admin`. Always returns generic success (no email enumeration).
+- `POST /api/v1/users/admin/reset-password` – query `token`, `email`; body `{ newPassword }`. Token expires in 15 minutes.
+- `POST /api/v1/users/admin/emergency-reset-password` – send `{ email, newPassword, emergencyKey }`. Requires `ADMIN_EMERGENCY_RESET_KEY` env var. Rate-limited (5 attempts/hour/IP). Writes audit log.
+- `POST /api/v1/users/admin/change-password` – Auth required. Body `{ currentPassword, newPassword, confirmPassword }`. Changes the logged-in admin user’s password.
+
 ### Admin user controls
 - `GET /api/v1/users/admin/get-all-users` – internal list; no body.
 - `POST /api/v1/users/admin/create-user` – requires `{ email, password }`, optional `{ firstName, lastName, permissions: string[] }`.
