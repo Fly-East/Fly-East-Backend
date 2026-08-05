@@ -541,6 +541,9 @@ export const getTopTenTreksByCategory = async (req: Request, res: Response) => {
   }
 };
 
+const isObjectIdString = (value: string) =>
+  /^[a-fA-F0-9]{24}$/.test(value);
+
 export const getPackageById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -551,9 +554,7 @@ export const getPackageById = async (req: Request, res: Response) => {
       });
     }
 
-    const query: any = mongoose.Types.ObjectId.isValid(id)
-      ? { _id: id }
-      : { slug: id };
+    const query: any = isObjectIdString(id) ? { _id: id } : { slug: id };
 
     const pkgDoc = (await Package.findOne(query)) as PackageDocument | null;
     if (!pkgDoc) {
