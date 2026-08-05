@@ -273,17 +273,37 @@ Booking System`;
     userEmail: string,
     token: string
   ): Promise<void> {
-    const resetUrl = `${
-      process.env.FRONTEND_BASE_URL
-    }/reset-password?token=${token}&email=${encodeURIComponent(userEmail)}`;
+    const baseUrl =
+      process.env.FRONTEND_BASE_URL || process.env.FRONTEND_URL || "";
+    await this.sendPasswordResetEmail(userEmail, token, baseUrl, "1 hour");
+  }
+
+  public async sendAdminForgotPasswordEmail(
+    userEmail: string,
+    token: string
+  ): Promise<void> {
+    const baseUrl = process.env.ADMIN_FRONTEND_BASE_URL;
+    if (!baseUrl) {
+      throw new Error("ADMIN_FRONTEND_BASE_URL is not configured");
+    }
+    await this.sendPasswordResetEmail(userEmail, token, baseUrl, "15 minutes");
+  }
+
+  private async sendPasswordResetEmail(
+    userEmail: string,
+    token: string,
+    baseUrl: string,
+    expiresIn: string
+  ): Promise<void> {
+    const resetUrl = `${baseUrl.replace(/\/$/, "")}/reset-password?token=${token}&email=${encodeURIComponent(userEmail)}`;
     const html = forgotPasswordTemplate({
       resetUrl,
-      expiresIn: "1 hour",
+      expiresIn,
     });
     const text = `Password Reset Request
 Use the link below to reset your password:
 ${resetUrl}
-Expires in 1 hour. Ignore if you didn't request.`;
+Expires in ${expiresIn}. Ignore if you didn't request.`;
 
     await this.sendEmail({
       to: userEmail,

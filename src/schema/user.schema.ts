@@ -109,6 +109,52 @@ export const deleteUserSchema = z.object({
   }),
 });
 
+// Admin password reset schemas
+export const adminForgotPasswordSchema = z.object({
+  body: z.object({
+    email: baseUserSchema.email,
+  }),
+});
+
+export const adminResetPasswordSchema = z.object({
+  query: z.object({
+    token: z.string().min(1, "Token is required"),
+    email: baseUserSchema.email,
+  }),
+  body: z.object({
+    newPassword: baseUserSchema.password,
+  }),
+});
+
+export const adminEmergencyResetPasswordSchema = z.object({
+  body: z.object({
+    email: baseUserSchema.email,
+    newPassword: baseUserSchema.password,
+    emergencyKey: z.string().min(1, "Emergency key is required"),
+  }),
+});
+
+export const adminChangePasswordSchema = z.object({
+  body: z
+    .object({
+      currentPassword: z
+        .string({ required_error: "Current password is required" })
+        .min(1, "Current password is required"),
+      newPassword: baseUserSchema.password,
+      confirmPassword: z
+        .string({ required_error: "Confirm password is required" })
+        .min(1, "Confirm password is required"),
+    })
+    .refine((data) => data.newPassword === data.confirmPassword, {
+      message: "Passwords do not match",
+      path: ["confirmPassword"],
+    })
+    .refine((data) => data.currentPassword !== data.newPassword, {
+      message: "New password must be different from current password",
+      path: ["newPassword"],
+    }),
+});
+
 // Types
 export type LoginUserInput = z.infer<typeof loginUserSchema>["body"];
 export type CreateUserInput = z.infer<typeof createUserSchema>["body"];
@@ -116,3 +162,15 @@ export type GetUserInput = z.infer<typeof getUserSchema>["params"];
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 export type DeleteUserInput = z.infer<typeof deleteUserSchema>["params"];
 export type ReadUserInput = z.infer<typeof getUserSchema>;
+export type AdminForgotPasswordInput = z.infer<
+  typeof adminForgotPasswordSchema
+>["body"];
+export type AdminResetPasswordInput = z.infer<
+  typeof adminResetPasswordSchema
+>["body"];
+export type AdminEmergencyResetPasswordInput = z.infer<
+  typeof adminEmergencyResetPasswordSchema
+>["body"];
+export type AdminChangePasswordInput = z.infer<
+  typeof adminChangePasswordSchema
+>["body"];
