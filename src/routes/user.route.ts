@@ -6,10 +6,22 @@ import {
   currentUserHandler,
   resetPasswordHandler,
   forgotPasswordHandler,
+  forgotAdminPasswordHandler,
+  resetAdminPasswordHandler,
+  emergencyResetAdminPasswordHandler,
+  changeAdminPasswordHandler,
 } from "../controller/user.controller";
-import { createUserSchema, loginUserSchema } from "../schema/user.schema";
+import {
+  createUserSchema,
+  loginUserSchema,
+  adminForgotPasswordSchema,
+  adminResetPasswordSchema,
+  adminEmergencyResetPasswordSchema,
+  adminChangePasswordSchema,
+} from "../schema/user.schema";
 import { validate } from "../middleware/validate";
 import { checkPermissions, isAdmin } from "../middleware/isAdmin";
+import { emergencyResetRateLimiter } from "../middleware/emergencyResetRateLimiter";
 
 import {
   createUser,
@@ -37,6 +49,32 @@ router.get("/api/v1/users/current", currentUserHandler);
 
 router.post("/api/v1/users/reset-password", resetPasswordHandler);
 router.post("/api/v1/users/forgot-password", forgotPasswordHandler);
+
+// Admin password reset (public)
+router.post(
+  "/api/v1/users/admin/forgot-password",
+  [validate(adminForgotPasswordSchema)],
+  forgotAdminPasswordHandler
+);
+router.post(
+  "/api/v1/users/admin/reset-password",
+  [validate(adminResetPasswordSchema)],
+  resetAdminPasswordHandler
+);
+router.post(
+  "/api/v1/users/admin/emergency-reset-password",
+  emergencyResetRateLimiter,
+  [validate(adminEmergencyResetPasswordSchema)],
+  emergencyResetAdminPasswordHandler
+);
+
+// Authenticated: change own password while logged in
+router.post(
+  "/api/v1/users/admin/change-password",
+  isAdmin,
+  [validate(adminChangePasswordSchema)],
+  changeAdminPasswordHandler
+);
 
 // Admin-only routes
 router.get(

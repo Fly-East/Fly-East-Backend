@@ -3,13 +3,42 @@ import AppError from "../utils/appError";
 import { createUser, findUser } from "../service/user.service";
 import { generateHashedPassword } from "../utils/generateHashedPassword";
 import { CreateUserInput, LoginUserInput } from "../schema/user.schema";
-var colors = require("colors");
 import jwt from "jsonwebtoken";
 import UserModel from "../models/user.model";
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
+import { isAdminResetRole } from "../utils/adminRoles";
+import { secureCompare } from "../utils/secureCompare";
+import { trackPasswordResetAudit } from "../service/passwordResetAudit.service";
+
+var colors = require("colors");
 dotenv.config();
+
+const ADMIN_RESET_TOKEN_EXPIRY_MS = 15 * 60 * 1000; // 15 minutes
+const GENERIC_FORGOT_MSG =
+  "If an account exists for that email, a reset link has been sent.";
+
+function createResetToken(): { resetToken: string; hashedToken: string } {
+  const resetToken = crypto.randomBytes(32).toString("hex");
+  const hashedToken = crypto
+    .createHash("sha256")
+    .update(resetToken)
+    .digest("hex");
+  return { resetToken, hashedToken };
+}
+
+async function applyPasswordReset(
+  user: InstanceType<typeof UserModel>,
+  newPassword: string
+): Promise<void> {
+  user.set({
+    password: newPassword,
+    resetPasswordToken: undefined,
+    resetPasswordExpires: undefined,
+  });
+  await user.save();
+}
 
 export async function createUserHandler(
   req: Request<{}, {}, CreateUserInput>,
@@ -304,6 +333,231 @@ export async function resetPasswordHandler(
     });
   } catch (error) {
     logger.error("Reset password error:", error);
+    next(new AppError("Internal server error", 500));
+  }
+}
+
+export async function forgotAdminPasswordHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const { email } = req.body;
+    const user = await UserModel.findOne({ email });
+
+    if (!user || !isAdminResetRole(user.role)) {
+      return res.status(200).json({
+        status: "success",
+        msg: GENERIC_FORGOT_MSG,
+      });
+    }
+
+    const { resetToken, hashedToken } = createResetToken();
+
+    user.set({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: new Date(Date.now() + ADMIN_RESET_TOKEN_EXPIRY_MS),
+    });
+
+    await user.save({ validateBeforeSave: false });
+
+    const emailService = new EmailService();
+    await emailService.sendAdminForgotPasswordEmail(user.email, resetToken);
+
+    await trackPasswordResetAudit({
+      email: user.email,
+      action: "admin-forgot",
+      success: true,
+      req,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      msg: GENERIC_FORGOT_MSG,
+    });
+  } catch (error) {
+    logger.error("Admin forgot password error:", error);
+    next(new AppError("Internal server error", 500));
+  }
+}
+
+export async function resetAdminPasswordHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const { token, email } = req.query;
+    const { newPassword } = req.body;
+
+    if (typeof token !== "string" || typeof email !== "string") {
+      return res.status(400).json({ status: "error", msg: "Invalid token" });
+    }
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await UserModel.findOne({
+      email,
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    if (!user || !isAdminResetRole(user.role)) {
+      await trackPasswordResetAudit({
+        email: String(email),
+        action: "admin-reset",
+        success: false,
+        failureReason: "Invalid or expired token",
+        req,
+      });
+      return res
+        .status(400)
+        .json({ status: "error", msg: "Invalid or expired token" });
+    }
+
+    await applyPasswordReset(user, newPassword);
+
+    await trackPasswordResetAudit({
+      email: user.email,
+      action: "admin-reset",
+      success: true,
+      req,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      msg: "Password reset successful",
+    });
+  } catch (error) {
+    logger.error("Admin reset password error:", error);
+    next(new AppError("Internal server error", 500));
+  }
+}
+
+export async function emergencyResetAdminPasswordHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const { email, newPassword, emergencyKey } = req.body;
+    const configuredKey = process.env.ADMIN_EMERGENCY_RESET_KEY;
+
+    if (!configuredKey) {
+      logger.error("ADMIN_EMERGENCY_RESET_KEY is not configured");
+      return res.status(503).json({
+        status: "error",
+        msg: "Emergency reset is not available",
+      });
+    }
+
+    if (!secureCompare(emergencyKey, configuredKey)) {
+      await trackPasswordResetAudit({
+        email,
+        action: "emergency-reset",
+        success: false,
+        failureReason: "Invalid emergency key",
+        req,
+      });
+      return res.status(403).json({
+        status: "error",
+        msg: "Invalid emergency key",
+      });
+    }
+
+    const user = await UserModel.findOne({ email });
+
+    if (!user || !isAdminResetRole(user.role)) {
+      await trackPasswordResetAudit({
+        email,
+        action: "emergency-reset",
+        success: false,
+        failureReason: "User not found or not an admin role",
+        req,
+      });
+      return res.status(400).json({
+        status: "error",
+        msg: "Unable to reset password for this account",
+      });
+    }
+
+    await applyPasswordReset(user, newPassword);
+
+    await trackPasswordResetAudit({
+      email: user.email,
+      action: "emergency-reset",
+      success: true,
+      req,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      msg: "Password reset successful",
+    });
+  } catch (error) {
+    logger.error("Emergency admin reset password error:", error);
+    next(new AppError("Internal server error", 500));
+  }
+}
+
+export async function changeAdminPasswordHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const authUser = req.user;
+
+    if (!authUser?.userId && !authUser?.email) {
+      return res.status(401).json({
+        status: "error",
+        msg: "Unauthorized",
+      });
+    }
+
+    const user = await UserModel.findOne(
+      authUser.userId ? { _id: authUser.userId } : { email: authUser.email }
+    ).select("+password");
+
+    if (!user || !isAdminResetRole(user.role)) {
+      return res.status(403).json({
+        status: "error",
+        msg: "You are not allowed to change password for this account",
+      });
+    }
+
+    if (!user.password) {
+      return res.status(500).json({
+        status: "error",
+        msg: "User password not set up correctly",
+      });
+    }
+
+    const isCurrentValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isCurrentValid) {
+      return res.status(400).json({
+        status: "error",
+        msg: "Current password is incorrect",
+      });
+    }
+
+    await applyPasswordReset(user, newPassword);
+
+    await trackPasswordResetAudit({
+      email: user.email,
+      action: "admin-reset",
+      success: true,
+      req,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      msg: "Password changed successfully",
+    });
+  } catch (error) {
+    logger.error("Change admin password error:", error);
     next(new AppError("Internal server error", 500));
   }
 }
