@@ -1,12 +1,16 @@
-import dotenv from "dotenv";
-dotenv.config();
-
 import express, { Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import cors, { CorsOptions } from "cors";
 import http from "http";
 import { Server } from "./shims/socketIoServer";
 
+import {
+  ALLOWED_ORIGINS,
+  IS_PROD,
+  ADMIN_BOOTSTRAP_EMAIL,
+  ADMIN_BOOTSTRAP_PASSWORD,
+  PORT,
+} from "./configs/env";
 import logger from "./utils/logger";
 import connectDB from "./utils/connectDB";
 import UserModel from "./models/user.model";
@@ -81,13 +85,7 @@ app.use(express.static("public"));
 app.use(sanitizeHtmlMiddleware);
 
 // Get allowed origins from environment variable
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",")
-      .map((origin) => origin.trim())
-      .filter((origin) => origin.length > 0)
-  : [];
-
-logger.info("Allowed Origins:", allowedOrigins);
+logger.info("Allowed Origins:", ALLOWED_ORIGINS);
 
 // Add localhost origins for development
 const developmentOrigins = [
@@ -99,7 +97,7 @@ const developmentOrigins = [
   "http://127.0.0.1:5000",
 ];
 
-const allAllowedOrigins = [...allowedOrigins, ...developmentOrigins];
+const allAllowedOrigins = [...ALLOWED_ORIGINS, ...developmentOrigins];
 
 // CORS configuration
 const corsOptions: CorsOptions = {
@@ -115,7 +113,7 @@ const corsOptions: CorsOptions = {
     }
 
     // For production, log blocked origins
-    if (process.env.NODE_ENV === "production") {
+    if (IS_PROD) {
       logger.warn(`CORS blocked for origin: ${origin}`);
     }
 
@@ -185,7 +183,7 @@ const io = new Server(server, {
         return callback(null, true);
       }
 
-      if (process.env.NODE_ENV === "production") {
+      if (IS_PROD) {
         logger.warn(`Socket.IO CORS blocked for origin: ${origin}`);
       }
 
@@ -312,13 +310,23 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 
 async function createAdminIfNotPresent() {
   try {
+    const email = ADMIN_BOOTSTRAP_EMAIL;
+    const password = ADMIN_BOOTSTRAP_PASSWORD;
+
+    if (!email || !password) {
+      logger.warn(
+        "Skipping bootstrap admin: set ADMIN_BOOTSTRAP_EMAIL and ADMIN_BOOTSTRAP_PASSWORD"
+      );
+      return;
+    }
+
     const adminExist = await UserModel.findOne({
-      email: "flyeastadmin2025@webx.com",
+      role: "admin",
     });
     if (!adminExist) {
       await UserModel.create({
-        email: "flyeastadmin2025@webx.com",
-        password: "flyeastadminxy@123",
+        email,
+        password,
         role: "admin",
         isVerified: true,
         verifyToken: "",
@@ -330,8 +338,6 @@ async function createAdminIfNotPresent() {
   }
 }
 
-const port = process.env.PORT || 5000;
-
 connectRedis()
   .then((connected) => {
     if (connected) logger.info("Redis cache is enabled");
@@ -341,8 +347,8 @@ connectRedis()
     logger.warn(`Redis initialization warning: ${error.message}`);
   });
 
-server.listen(port, async () => {
-  logger.info(`🚀 Server running on port http://localhost:${port}`);
+server.listen(PORT, async () => {
+  logger.info(`🚀 Server running on port http://localhost:${PORT}`);
 
   try {
     await connectDB();

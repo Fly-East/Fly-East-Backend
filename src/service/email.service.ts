@@ -6,6 +6,11 @@ import {
   bookingConfirmationTravelerTemplate,
   forgotPasswordTemplate,
 } from "../mailtemplate";
+import {
+  ADMIN_EMAIL,
+  FRONTEND_BASE_URL,
+  ADMIN_FRONTEND_BASE_URL,
+} from "../configs/env";
 
 interface EmailOptions {
   to: string;
@@ -37,7 +42,7 @@ export interface IBooking {
 }
 
 export class EmailService {
-  private readonly COMPANY_EMAIL: string = process.env.ADMIN_EMAIL as string;
+  private readonly COMPANY_EMAIL: string = ADMIN_EMAIL as string;
 
   public async sendBookingConfirmation(booking: IBooking): Promise<void> {
     try {
@@ -273,8 +278,7 @@ Booking System`;
     userEmail: string,
     token: string
   ): Promise<void> {
-    const baseUrl =
-      process.env.FRONTEND_BASE_URL || process.env.FRONTEND_URL || "";
+    const baseUrl = FRONTEND_BASE_URL;
     await this.sendPasswordResetEmail(userEmail, token, baseUrl, "1 hour");
   }
 
@@ -282,7 +286,7 @@ Booking System`;
     userEmail: string,
     token: string
   ): Promise<void> {
-    const baseUrl = process.env.ADMIN_FRONTEND_BASE_URL;
+    const baseUrl = ADMIN_FRONTEND_BASE_URL;
     if (!baseUrl) {
       throw new Error("ADMIN_FRONTEND_BASE_URL is not configured");
     }
