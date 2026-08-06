@@ -160,7 +160,7 @@ function computeOptionalLineTotal(
   unitPrice: number,
   quantity: number,
   pricingType: BookingPricingType,
-  totalPeople: number,
+  billablePeople: number,
   tripDays: number
 ): number {
   const qty = Math.max(0, quantity);
@@ -168,7 +168,7 @@ function computeOptionalLineTotal(
 
   switch (pricingType) {
     case "perPerson":
-      return price * qty * Math.max(0, totalPeople);
+      return price * qty * Math.max(0, billablePeople);
     case "perDay":
       return price * qty * Math.max(1, tripDays);
     case "perBooking":
@@ -181,13 +181,20 @@ function optionalFormula(
   unitPrice: number,
   quantity: number,
   pricingType: BookingPricingType,
-  totalPeople: number,
-  tripDays: number
+  billablePeople: number,
+  tripDays: number,
+  costsParticipants: boolean,
+  extraParticipants: number
 ): string {
   const price = `$${unitPrice}`;
   switch (pricingType) {
-    case "perPerson":
-      return `${price} × ${quantity} × ${totalPeople} travelers`;
+    case "perPerson": {
+      if (costsParticipants && extraParticipants > 0) {
+        const travelers = Math.max(0, billablePeople - extraParticipants);
+        return `${price} × ${quantity} × (${travelers} travelers + ${extraParticipants} extras)`;
+      }
+      return `${price} × ${quantity} × ${billablePeople} travelers`;
+    }
     case "perDay":
       return `${price} × ${quantity} × ${tripDays} days`;
     case "perBooking":
@@ -199,14 +206,20 @@ function optionalFormula(
 /**
  * Pure booking total calculator.
  *
- * Uncovered participants (extraPeople) come from optional addons that
- * represent people — typically `participantsPerQuantity > 0` (Additional
- * Porter). `costsParticipants` on those optionals also triggers the
- * package-per-person surcharge.
+ * Headcount:
+ * - Default addons with `participantsPerQuantity > 0` → included staff
+ * - Optional addons with `participantsPerQuantity > 0` → extra people
+ *   (e.g. Additional Porter). `costsParticipants` alone never adds people.
  *
- * Default addons with `costsParticipants` (e.g. Transportation) stay $0
- * for booked travelers, then charge unitPrice × qty × extraPeople.
- * Defaults without the flag (e.g. Permit) stay included / $0.
+ * Pricing (optional, non-default):
+ * - perPerson + costsParticipants false → charge booked travelers only
+ * - perPerson + costsParticipants true → charge travelers + extras
+ *   introduced by participant add-ons
+ * - Optional addons that introduce people AND have `costsParticipants`:
+ *   also add a package-per-person surcharge for those people
+ * - Default addons with `costsParticipants` (e.g. Transportation): stay $0
+ *   for booked travelers, then charge unitPrice × qty × extraPeople
+ * - Defaults without the flag (e.g. Permit) stay included / $0
  */
 export function calculateBookingTotal(
   input: CalculateBookingTotalInput
@@ -239,6 +252,7 @@ export function calculateBookingTotal(
 
   let includedParticipants = 0;
 
+  // Pass 1: headcount + draft lines (optional perPerson totals finalized in pass 2)
   const drafts: Draft[] = selected.map((selectedAddon) => {
     const catalog = selectedAddon.addon;
     const quantity = Math.max(1, Number(selectedAddon.quantity) || 1);
@@ -264,35 +278,34 @@ export function calculateBookingTotal(
     includedParticipants += includedPeopleFromLine;
 
     if (!isDefault) {
-      lineTotal = computeOptionalLineTotal(
-        unitPrice,
-        quantity,
-        pricingType,
-        totalPeople,
-        tripDays
-      );
-      formula = optionalFormula(
-        unitPrice,
-        quantity,
-        pricingType,
-        totalPeople,
-        tripDays
-      );
-
-      // Optional units that cover people (Additional Porter: ppq > 0)
-      // introduce uncovered participants for default costsParticipants addons.
+      // Only "Counts as a trip participant" (ppq > 0) adds headcount.
       if (participantsPerQuantity > 0) {
         extraPeopleFromLine = quantity * participantsPerQuantity;
-      } else if (costsParticipants) {
-        extraPeopleFromLine = quantity;
-      }
-
-      if (extraPeopleFromLine > 0) {
         extraParticipants += extraPeopleFromLine;
-        // Package surcharge only when the optional addon opts into it
         if (costsParticipants) {
           surchargeParticipants += extraPeopleFromLine;
         }
+      }
+
+      // Non-perPerson optionals can be priced immediately (no extras dependency).
+      // perPerson waits until extras are known (pass 2).
+      if (pricingType !== "perPerson") {
+        lineTotal = computeOptionalLineTotal(
+          unitPrice,
+          quantity,
+          pricingType,
+          totalPeople,
+          tripDays
+        );
+        formula = optionalFormula(
+          unitPrice,
+          quantity,
+          pricingType,
+          totalPeople,
+          tripDays,
+          costsParticipants,
+          0
+        );
       }
     }
 
@@ -311,6 +324,33 @@ export function calculateBookingTotal(
       formula,
     };
   });
+
+  // Pass 2: optional perPerson — travelers only, or travelers + extras
+  for (const draft of drafts) {
+    if (draft.isDefault) continue;
+    if (draft.pricingType !== "perPerson") continue;
+
+    const billablePeople = draft.costsParticipants
+      ? totalPeople + extraParticipants
+      : totalPeople;
+
+    draft.lineTotal = computeOptionalLineTotal(
+      draft.unitPrice,
+      draft.quantity,
+      draft.pricingType,
+      billablePeople,
+      tripDays
+    );
+    draft.formula = optionalFormula(
+      draft.unitPrice,
+      draft.quantity,
+      draft.pricingType,
+      billablePeople,
+      tripDays,
+      draft.costsParticipants,
+      extraParticipants
+    );
+  }
 
   // Default addons with costsParticipants scale for uncovered people
   // (Transportation). Pricing type does not block this — the flag means
