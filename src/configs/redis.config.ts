@@ -1,11 +1,15 @@
-import { RedisOptions } from "ioredis";
+import {
+  REDIS_HOST,
+  REDIS_PORT,
+  REDIS_PASSWORD,
+  REDIS_DB,
+  REDIS_TLS,
+} from "./env";
 
-const redisConfig: RedisOptions = {
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  db: process.env.REDIS_DB ? Number(process.env.REDIS_DB) : undefined,
-  tls: process.env.REDIS_TLS === "true" ? {} : undefined,
+export const redisConfig = {
+  host: REDIS_HOST,
+  port: REDIS_PORT,
+  password: REDIS_PASSWORD,
+  db: REDIS_DB,
+  tls: REDIS_TLS ? {} : undefined,
 };
-
-export { redisConfig };
