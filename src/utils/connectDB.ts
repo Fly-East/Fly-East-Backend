@@ -1,6 +1,7 @@
 import mongoose, { ConnectOptions } from "mongoose";
 import logger from "./logger";
 import retry from "retry";
+import { DB_CONNECTION } from "../configs/env";
 
 // Database connection retry config
 const operation = retry.operation({
@@ -11,7 +12,7 @@ const operation = retry.operation({
   randomize: true, // Randomize the timeouts
 });
 
-const connectionString = process.env.DB_CONNECTION;
+const connectionString = DB_CONNECTION;
 
 if (!connectionString) {
   logger.error("MongoDB connection string is not defined in environment variables");

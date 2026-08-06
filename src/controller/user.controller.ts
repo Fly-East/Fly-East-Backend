@@ -7,13 +7,12 @@ import jwt from "jsonwebtoken";
 import UserModel from "../models/user.model";
 import crypto from "crypto";
 import bcrypt from "bcrypt";
-import dotenv from "dotenv";
 import { isAdminResetRole } from "../utils/adminRoles";
 import { secureCompare } from "../utils/secureCompare";
 import { trackPasswordResetAudit } from "../service/passwordResetAudit.service";
+import { AUTH_SECRET_KEY, IS_PROD, ADMIN_EMERGENCY_RESET_KEY } from "../configs/env";
 
 var colors = require("colors");
-dotenv.config();
 
 const ADMIN_RESET_TOKEN_EXPIRY_MS = 15 * 60 * 1000; // 15 minutes
 const GENERIC_FORGOT_MSG =
@@ -165,7 +164,7 @@ export async function loginUserHandler(
     });
 
     // Create token
-    if (!process.env.AUTH_SECRET_KEY) {
+    if (!AUTH_SECRET_KEY) {
       throw new Error("AUTH_SECRET_KEY is not defined");
     }
 
@@ -176,7 +175,7 @@ export async function loginUserHandler(
         role: user.role,
         permissions: user.permissions,
       },
-      process.env.AUTH_SECRET_KEY,
+      AUTH_SECRET_KEY,
       { expiresIn: "1d" }
     );
 
@@ -189,7 +188,7 @@ export async function loginUserHandler(
       .status(200)
       .cookie("accessToken", accessToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: IS_PROD,
         sameSite: "strict",
         maxAge: 24 * 60 * 60 * 1000, // 1 day
       })
@@ -442,7 +441,7 @@ export async function emergencyResetAdminPasswordHandler(
 ) {
   try {
     const { email, newPassword, emergencyKey } = req.body;
-    const configuredKey = process.env.ADMIN_EMERGENCY_RESET_KEY;
+    const configuredKey = ADMIN_EMERGENCY_RESET_KEY;
 
     if (!configuredKey) {
       logger.error("ADMIN_EMERGENCY_RESET_KEY is not configured");

@@ -1,6 +1,7 @@
 import { Response, NextFunction, Request } from "express";
 import jwt from "jsonwebtoken";
 import logger from "../utils/logger";
+import { AUTH_SECRET_KEY } from "../configs/env";
 
 interface UserPayload {
   _id?: string;
@@ -42,7 +43,7 @@ export const isAdmin = (req: Request, res: Response, next: NextFunction) => {
     }
 
     // Verify token
-    if (!process.env.AUTH_SECRET_KEY) {
+    if (!AUTH_SECRET_KEY) {
       logger.error("AUTH_SECRET_KEY is not defined");
       return res.status(500).json({
         error: true,
@@ -52,7 +53,7 @@ export const isAdmin = (req: Request, res: Response, next: NextFunction) => {
 
     const decoded = jwt.verify(
       token,
-      process.env.AUTH_SECRET_KEY
+      AUTH_SECRET_KEY
     ) as UserPayload;
 
     // Check if user has admin role
