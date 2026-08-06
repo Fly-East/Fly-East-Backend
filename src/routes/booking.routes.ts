@@ -2,6 +2,8 @@ import { Router } from "express";
 import bookingController from "../controller/booking.controller";
 
 const {
+  previewBooking,
+  quoteBookingAdmin,
   createBooking,
   getAllBookings,
   getBookingById,
@@ -10,8 +12,27 @@ const {
   cancelBooking,
 } = bookingController;
 import { checkPermissions, isAdmin } from "../middleware/isAdmin";
+import { validate } from "../middleware/validate";
+import {
+  bookingPreviewSchema,
+  bookingQuoteSchema,
+} from "../schema/bookingQuote.schema";
 
 const router = Router();
+
+router.post(
+  "/api/v1/booking/preview",
+  validate(bookingPreviewSchema),
+  previewBooking
+);
+
+router.post(
+  "/api/v1/booking/quote",
+  isAdmin,
+  validate(bookingQuoteSchema),
+  quoteBookingAdmin
+);
+
 router.post("/api/v1/booking", createBooking);
 
 router.get("/api/v1/booking", isAdmin, getAllBookings);
