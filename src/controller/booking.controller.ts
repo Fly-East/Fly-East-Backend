@@ -13,6 +13,10 @@ import { sendEmail } from "../modules/email";
 import { dynamicNumber } from "../templates/invoiceTemplate";
 import { Traveler } from "../service/email.service";
 import { bookingInvoiceTemplate } from "../mailtemplate";
+import {
+  BookingQuoteError,
+  quoteBooking,
+} from "../service/bookingQuote.service";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -30,6 +34,85 @@ interface BookingCache {
     previousPage: number | null;
   };
 }
+
+const previewBooking = async (req: Request, res: Response) => {
+  try {
+    const {
+      package: packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    } = req.body;
+
+    const quote = await quoteBooking({
+      packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: quote.publicView,
+    });
+  } catch (error) {
+    if (error instanceof BookingQuoteError) {
+      return res.status(error.statusCode).json({
+        status: "fail",
+        message: error.message,
+        ...(error.details ? { details: error.details } : {}),
+      });
+    }
+    logger.error("Error previewing booking price:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "An error occurred while calculating the booking price",
+    });
+  }
+};
+
+const quoteBookingAdmin = async (req: Request, res: Response) => {
+  try {
+    const {
+      package: packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    } = req.body;
+
+    const quote = await quoteBooking({
+      packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        ...quote.publicView,
+        ...quote.fullBreakdown,
+      },
+    });
+  } catch (error) {
+    if (error instanceof BookingQuoteError) {
+      return res.status(error.statusCode).json({
+        status: "fail",
+        message: error.message,
+        ...(error.details ? { details: error.details } : {}),
+      });
+    }
+    logger.error("Error quoting booking price:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "An error occurred while calculating the booking quote",
+    });
+  }
+};
 
 const createBooking = async (req: Request, res: Response) => {
   try {
@@ -655,6 +738,8 @@ const cancelBooking = async (req: Request, res: Response) => {
 };
 
 const bookingController = {
+  previewBooking,
+  quoteBookingAdmin,
   createBooking,
   getAllBookings,
   getBookingById,
