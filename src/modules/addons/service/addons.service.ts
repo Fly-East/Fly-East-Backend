@@ -21,8 +21,6 @@ export type CreateAddonInput = {
   name: string;
   description: string;
   slug?: string;
-  allowsQuantity?: unknown;
-  costsParticipants?: unknown;
   participantsPerQuantity?: unknown;
   isActive?: unknown;
   sortOrder?: unknown;
@@ -32,8 +30,6 @@ export type UpdateAddonInput = {
   name?: string;
   description?: string;
   slug?: string;
-  allowsQuantity?: unknown;
-  costsParticipants?: unknown;
   participantsPerQuantity?: unknown;
   isActive?: unknown;
   sortOrder?: unknown;
@@ -61,7 +57,6 @@ class AddonsService {
       (typeof slug === "string" && slug.trim()) ||
       `${slugify(name)}-${Date.now()}`;
 
-    const costsParticipants = toBoolean(input.costsParticipants);
     const participantsPerQuantity = input.participantsPerQuantity
       ? Number(input.participantsPerQuantity)
       : 0;
@@ -70,8 +65,6 @@ class AddonsService {
       name,
       description,
       slug: resolvedSlug,
-      allowsQuantity: toBoolean(input.allowsQuantity),
-      costsParticipants,
       participantsPerQuantity,
       isActive: toBoolean(input.isActive, true),
       sortOrder,
@@ -104,24 +97,21 @@ class AddonsService {
       throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
     }
 
-    const nextCostsParticipants =
-      input.costsParticipants !== undefined
-        ? toBoolean(input.costsParticipants)
-        : existingAddon.costsParticipants;
     const nextParticipants =
       input.participantsPerQuantity !== undefined
         ? Number(input.participantsPerQuantity)
         : existingAddon.participantsPerQuantity;
 
-    if (nextCostsParticipants && nextParticipants > 0) {
+    if (nextParticipants > 0) {
       const conflictingOffer = await PackageAddon.findOne({
         addon: addonId,
+        costsParticipants: true,
         pricingType: "perPerson",
       });
       if (conflictingOffer) {
         throw Object.assign(
           new Error(
-            "Cannot set costsParticipants with participants while package offers use perPerson pricing. Change those offers first."
+            "Cannot set participants while package offers cost participants and use perPerson pricing. Change those offers first."
           ),
           { statusCode: 400 }
         );
@@ -136,12 +126,6 @@ class AddonsService {
           description: input.description,
         }),
         ...(input.slug !== undefined && { slug: input.slug }),
-        ...(input.allowsQuantity !== undefined && {
-          allowsQuantity: toBoolean(input.allowsQuantity),
-        }),
-        ...(input.costsParticipants !== undefined && {
-          costsParticipants: toBoolean(input.costsParticipants),
-        }),
         ...(input.participantsPerQuantity !== undefined && {
           participantsPerQuantity: Number(input.participantsPerQuantity),
         }),

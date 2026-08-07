@@ -18,14 +18,6 @@ const AddonsSchema = new Schema<IAddons>(
       trim: true,
       required: true,
     },
-    allowsQuantity: {
-      type: Boolean,
-      default: false,
-    },
-    costsParticipants: {
-      type: Boolean,
-      default: false,
-    },
     isActive: {
       type: Boolean,
       default: true,
