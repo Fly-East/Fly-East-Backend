@@ -5,6 +5,7 @@ const {
   previewBooking,
   quoteBookingAdmin,
   createBooking,
+  checkoutBooking,
   getAllBookings,
   getBookingById,
   updateBookingStatus,
@@ -16,6 +17,8 @@ import { validate } from "../middleware/validate";
 import {
   bookingPreviewSchema,
   bookingQuoteSchema,
+  bookingLeadSchema,
+  bookingCheckoutSchema,
 } from "../schema/bookingQuote.schema";
 
 const router = Router();
@@ -33,7 +36,13 @@ router.post(
   quoteBookingAdmin
 );
 
-router.post("/api/v1/booking", createBooking);
+router.post("/api/v1/booking", validate(bookingLeadSchema), createBooking);
+
+router.post(
+  "/api/v1/booking/:id/checkout",
+  validate(bookingCheckoutSchema),
+  checkoutBooking
+);
 
 router.get("/api/v1/booking", isAdmin, getAllBookings);
 
@@ -53,7 +62,6 @@ router.delete(
   deleteBooking
 );
 
-// Cancel a booking
 router.patch(
   "/api/v1/booking/:id/cancel",
   isAdmin,
