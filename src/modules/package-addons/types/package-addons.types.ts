@@ -7,6 +7,8 @@ export interface IPackageAddon extends Document {
   price: number;
   pricingType: AddonPricingType;
   isDefault: boolean;
+  allowsQuantity: boolean;
+  costsParticipants: boolean;
   defaultQuantity: number;
   maxQuantity: number | null;
   isActive: boolean;
