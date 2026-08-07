@@ -54,6 +54,8 @@ export type BookingQuoteResult = {
   fullBreakdown: CalculateBookingTotalResult & {
     discount: BookingQuoteDiscountMeta;
   };
+  /** Catalog + quantities used for the quote (for snapshots) */
+  selectedAddons: SelectedAddonInput[];
 };
 
 export class BookingQuoteError extends Error {
@@ -267,5 +269,6 @@ export async function quoteBooking(
         ...(appliedPaxRange && { appliedPaxRange }),
       },
     },
+    selectedAddons,
   };
 }
