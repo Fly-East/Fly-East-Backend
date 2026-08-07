@@ -36,8 +36,13 @@ export type AddonLineTotal = {
   includedPeopleFromLine: number;
   /** Fee charged for this addon line (0 when fully included) */
   lineTotal: number;
-  /** Human-readable how lineTotal was derived */
+  /** Human-readable how lineTotal was derived (charge side) */
   formula: string;
+  /**
+   * Traveler coverage copy for default/included offers.
+   * Kept even when costsParticipants adds an extras charge on `formula`.
+   */
+  includedFormula?: string;
 };
 
 export type CalculateBookingTotalInput = {
@@ -204,6 +209,62 @@ function optionalFormula(
 }
 
 /**
+ * Presentation formula for included (default) lines that stay $0 for travelers.
+ * Does not affect lineTotal — display only.
+ */
+function defaultIncludedFormula(input: {
+  quantity: number;
+  pricingType: BookingPricingType;
+  totalPeople: number;
+  tripDays: number;
+  costsParticipants: boolean;
+  includedPeopleFromLine: number;
+  /** When extras are already charged on this line, skip the "if selected" hint */
+  extrasCharged?: boolean;
+}): string {
+  const qty = Math.max(1, input.quantity);
+  const travelers = Math.max(0, input.totalPeople);
+  const travelerWord = travelers === 1 ? "traveler" : "travelers";
+  const parts: string[] = [];
+
+  switch (input.pricingType) {
+    case "perPerson":
+      parts.push(
+        qty > 1
+          ? `Covered × ${qty} × ${travelers} ${travelerWord}`
+          : `Covered for ${travelers} ${travelerWord}`
+      );
+      break;
+    case "perDay":
+      parts.push(
+        qty > 1
+          ? `Covered × ${qty} × ${input.tripDays} days`
+          : `Covered for ${input.tripDays} days`
+      );
+      break;
+    case "perBooking":
+    default:
+      parts.push(
+        qty > 1
+          ? `Covered × ${qty} for booked travelers`
+          : "Covered for booked travelers"
+      );
+      break;
+  }
+
+  if (input.includedPeopleFromLine > 0) {
+    const n = input.includedPeopleFromLine;
+    parts.push(`+${n} included participant${n === 1 ? "" : "s"}`);
+  }
+
+  if (input.costsParticipants && !input.extrasCharged) {
+    parts.push("extras billed if participant add-ons are selected");
+  }
+
+  return parts.join(" · ");
+}
+
+/**
  * Pure booking total calculator.
  *
  * Headcount:
@@ -217,9 +278,9 @@ function optionalFormula(
  *   introduced by participant add-ons
  * - Optional addons that introduce people AND have `costsParticipants`:
  *   also add a package-per-person surcharge for those people
- * - Default addons with `costsParticipants` (e.g. Transportation): stay $0
+ * - Default addons with `costsParticipants` : stay $0
  *   for booked travelers, then charge unitPrice × qty × extraPeople
- * - Defaults without the flag (e.g. Permit) stay included / $0
+ * - Defaults without the flag stay included / $0
  */
 export function calculateBookingTotal(
   input: CalculateBookingTotalInput
@@ -248,6 +309,7 @@ export function calculateBookingTotal(
     includedPeopleFromLine: number;
     lineTotal: number;
     formula: string;
+    includedFormula?: string;
   };
 
   let includedParticipants = 0;
@@ -267,6 +329,7 @@ export function calculateBookingTotal(
 
     let lineTotal = 0;
     let formula = "Included in package";
+    let includedFormula: string | undefined;
     let extraPeopleFromLine = 0;
     const includedPeopleFromLine = includedPeopleForDefaultAddon({
       isDefault,
@@ -277,7 +340,17 @@ export function calculateBookingTotal(
     });
     includedParticipants += includedPeopleFromLine;
 
-    if (!isDefault) {
+    if (isDefault) {
+      includedFormula = defaultIncludedFormula({
+        quantity,
+        pricingType,
+        totalPeople,
+        tripDays,
+        costsParticipants,
+        includedPeopleFromLine,
+      });
+      formula = includedFormula;
+    } else {
       // Only "Counts as a trip participant" (ppq > 0) adds headcount.
       if (participantsPerQuantity > 0) {
         extraPeopleFromLine = quantity * participantsPerQuantity;
@@ -322,6 +395,7 @@ export function calculateBookingTotal(
       includedPeopleFromLine,
       lineTotal,
       formula,
+      ...(includedFormula ? { includedFormula } : {}),
     };
   });
 
@@ -353,13 +427,22 @@ export function calculateBookingTotal(
   }
 
   // Default addons with costsParticipants scale for uncovered people
-  // (Transportation). Pricing type does not block this — the flag means
-  // "included for booked travelers only; charge for extras".
+  // Traveler coverage stays on includedFormula;
+  // formula + lineTotal become the extras charge only.
   if (extraParticipants > 0) {
     for (const draft of drafts) {
       if (!draft.isDefault) continue;
       if (!draft.costsParticipants) continue;
 
+      draft.includedFormula = defaultIncludedFormula({
+        quantity: draft.quantity,
+        pricingType: draft.pricingType,
+        totalPeople,
+        tripDays,
+        costsParticipants: true,
+        includedPeopleFromLine: draft.includedPeopleFromLine,
+        extrasCharged: true,
+      });
       draft.lineTotal =
         draft.unitPrice * draft.quantity * extraParticipants;
       draft.formula = `$${draft.unitPrice} × ${draft.quantity} × ${extraParticipants} extra participants`;
