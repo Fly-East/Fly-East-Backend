@@ -30,6 +30,14 @@ const PackageAddonSchema = new Schema<IPackageAddon>(
       type: Boolean,
       default: false,
     },
+    allowsQuantity: {
+      type: Boolean,
+      default: false,
+    },
+    costsParticipants: {
+      type: Boolean,
+      default: false,
+    },
     defaultQuantity: {
       type: Number,
       default: 1,

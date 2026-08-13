@@ -3,9 +3,78 @@ import {
   BookingType,
   BookingStatus,
   PaymentStatus,
+  BookingStage,
 } from "../types/booking.type";
+import { ADDON_PRICING_TYPE_VALUES } from "../modules/addons/constants/addons.constants";
 
-// Create the schema for Booking
+const SelectedAddonSnapshotSchema = new Schema(
+  {
+    addonId: {
+      type: Schema.Types.ObjectId,
+      ref: "Addons",
+      required: true,
+    },
+    name: { type: String, required: true, trim: true },
+    quantity: { type: Number, required: true, min: 1 },
+    unitPrice: { type: Number, required: true, min: 0 },
+    pricingType: {
+      type: String,
+      enum: ADDON_PRICING_TYPE_VALUES,
+      required: true,
+    },
+    isDefault: { type: Boolean, default: false },
+    allowsQuantity: { type: Boolean, default: false },
+    costsParticipants: { type: Boolean, default: false },
+    participantsPerQuantity: { type: Number, default: 0, min: 0 },
+    lineTotal: { type: Number, required: true, min: 0 },
+    formula: { type: String, required: true },
+    includedFormula: { type: String },
+    extraPeopleFromLine: { type: Number, default: 0, min: 0 },
+    includedPeopleFromLine: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const PricingSnapshotSchema = new Schema(
+  {
+    currency: {
+      type: String,
+      required: true,
+      default: "USD",
+      uppercase: true,
+      trim: true,
+    },
+    tripDays: { type: Number, required: true, min: 1 },
+    totalPeople: { type: Number, required: true, min: 1 },
+    basePricePerPerson: { type: Number, required: true, min: 0 },
+    discountPercent: { type: Number, required: true, min: 0, default: 0 },
+    appliedPaxRange: {
+      type: {
+        min: { type: Number, required: true },
+        max: { type: Number, required: true },
+        discount: { type: Number, required: true },
+      },
+      required: false,
+    },
+    pricePerPerson: { type: Number, required: true, min: 0 },
+    packageBase: { type: Number, required: true, min: 0 },
+    addonsTotal: { type: Number, required: true, min: 0 },
+    participantSurcharge: { type: Number, required: true, min: 0 },
+    includedParticipants: { type: Number, required: true, min: 0 },
+    extraParticipants: { type: Number, required: true, min: 0 },
+    totalPeopleOnTrip: { type: Number, required: true, min: 0 },
+    subtotal: { type: Number, required: true, min: 0 },
+    paymentOption: {
+      type: String,
+      enum: ["full", "partial"],
+      required: true,
+      default: "full",
+    },
+    amountDueNow: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
 const BookingSchema = new Schema<BookingType>(
   {
     bookingReference: {
@@ -15,12 +84,26 @@ const BookingSchema = new Schema<BookingType>(
       trim: true,
       uppercase: true,
     },
-      addons: [
+    stage: {
+      type: String,
+      enum: Object.values(BookingStage),
+      default: BookingStage.BOOKED,
+      required: true,
+    },
+    addons: [
       {
         type: Schema.Types.ObjectId,
         ref: "Addons",
       },
     ],
+    selectedAddons: {
+      type: [SelectedAddonSnapshotSchema],
+      default: [],
+    },
+    pricing: {
+      type: PricingSnapshotSchema,
+      required: false,
+    },
     status: {
       type: String,
       enum: Object.values(BookingStatus),
@@ -38,7 +121,6 @@ const BookingSchema = new Schema<BookingType>(
       required: true,
       min: 0,
     },
- 
     currency: {
       type: String,
       required: true,
@@ -57,13 +139,11 @@ const BookingSchema = new Schema<BookingType>(
       type: Schema.Types.ObjectId,
       ref: "User",
     },
-
     totalPeople: {
       type: Number,
       required: true,
       min: 1,
     },
-
     package: {
       type: Schema.Types.ObjectId,
       ref: "Package",
@@ -100,7 +180,6 @@ const BookingSchema = new Schema<BookingType>(
         },
       },
     ],
-
     arrivalDate: {
       type: Date,
       required: false,
@@ -122,7 +201,6 @@ const BookingSchema = new Schema<BookingType>(
       type: String,
       trim: false,
     },
-
     seen: {
       type: Boolean,
       default: false,
@@ -135,13 +213,12 @@ const BookingSchema = new Schema<BookingType>(
   }
 );
 
-// Add index for frequently queried fields
 BookingSchema.index({ bookingReference: 1 }, { unique: true });
 BookingSchema.index({ "personalInfo.email": 1 });
 BookingSchema.index({ status: 1 });
 BookingSchema.index({ paymentStatus: 1 });
 BookingSchema.index({ arrivalDate: 1, departureDate: 1 });
+BookingSchema.index({ stage: 1, seen: 1 });
 
-// Create and export the model
 const Booking = model<BookingType>("Booking", BookingSchema);
 export default Booking;

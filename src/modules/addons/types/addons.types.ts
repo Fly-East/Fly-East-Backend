@@ -5,8 +5,6 @@ export interface IAddons extends Document {
   sortOrder: number;
   description: string;
   slug: string;
-  allowsQuantity: boolean;
-  costsParticipants: boolean;
   isActive: boolean;
   isDeleted: boolean;
   deletedAt: Date | null;

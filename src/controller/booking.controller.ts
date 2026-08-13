@@ -1,18 +1,30 @@
 import Booking from "../models/booking.model";
 import mongoose, { Types } from "mongoose";
 import { Request, Response } from "express";
-import { BookingStatus, PaymentStatus } from "../types/booking.type";
+import {
+  BookingStatus,
+  PaymentStatus,
+  BookingStage,
+  BookingType,
+} from "../types/booking.type";
 import Package from "../models/package.model";
-import { calculateTotalWithDiscount } from "../utils/calculateDiscount";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 import { FixedDate } from "../models";
-import { PackageAddon } from "../modules/package-addons";
-import FixedDateModel from "../models/fixedDate.model";
 import { sendEmail } from "../modules/email";
 import { dynamicNumber } from "../templates/invoiceTemplate";
 import { Traveler } from "../service/email.service";
 import { bookingInvoiceTemplate } from "../mailtemplate";
+import {
+  BookingQuoteError,
+  quoteBooking,
+  type BookingQuoteAddonInput,
+  type BookingQuoteResult,
+} from "../service/bookingQuote.service";
+import {
+  buildBookingPricingSnapshot,
+  type BookingPricingSnapshotPayload,
+} from "../service/bookingPricingSnapshot.service";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -31,6 +43,250 @@ interface BookingCache {
   };
 }
 
+const previewBooking = async (req: Request, res: Response) => {
+  try {
+    const {
+      package: packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    } = req.body;
+
+    const quote = await quoteBooking({
+      packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: quote.publicView,
+    });
+  } catch (error) {
+    if (error instanceof BookingQuoteError) {
+      return res.status(error.statusCode).json({
+        status: "fail",
+        message: error.message,
+        ...(error.details ? { details: error.details } : {}),
+      });
+    }
+    logger.error("Error previewing booking price:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "An error occurred while calculating the booking price",
+    });
+  }
+};
+
+const quoteBookingAdmin = async (req: Request, res: Response) => {
+  try {
+    const {
+      package: packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    } = req.body;
+
+    const quote = await quoteBooking({
+      packageId,
+      fixedDateId,
+      totalPeople,
+      paymentOption,
+      addons,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        ...quote.publicView,
+        ...quote.fullBreakdown,
+      },
+    });
+  } catch (error) {
+    if (error instanceof BookingQuoteError) {
+      return res.status(error.statusCode).json({
+        status: "fail",
+        message: error.message,
+        ...(error.details ? { details: error.details } : {}),
+      });
+    }
+    logger.error("Error quoting booking price:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "An error occurred while calculating the booking quote",
+    });
+  }
+};
+
+function generateBookingReference(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "";
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+function normalizePersonalInfo(personalInfo: unknown): Traveler[] {
+  const list = Array.isArray(personalInfo) ? personalInfo : [personalInfo];
+  return list.map((info: any) => ({
+    fullName: String(info.fullName || "").trim(),
+    email: String(info.email || "")
+      .trim()
+      .toLowerCase(),
+    country: String(info.country || "").trim(),
+    phoneNumber: String(info.phoneNumber || "").trim(),
+  }));
+}
+
+function normalizeAddonSelections(addons: unknown): BookingQuoteAddonInput[] {
+  if (!Array.isArray(addons)) return [];
+  return addons
+    .map((addon: any) => {
+      if (typeof addon === "string") {
+        return { id: addon, quantity: 1 };
+      }
+      const id = String(addon?.id || addon?._id || addon?.addonId || "");
+      const quantity = Math.max(1, Math.floor(Number(addon?.quantity) || 1));
+      return id ? { id, quantity } : null;
+    })
+    .filter((item): item is BookingQuoteAddonInput => Boolean(item?.id));
+}
+
+function applySnapshotToDoc(
+  booking: BookingType,
+  snapshot: BookingPricingSnapshotPayload,
+  extras: {
+    packageId: string;
+    fixedDateId: string;
+    totalPeople: number;
+    personalInfos: Traveler[];
+    message?: string;
+    arrivalDate?: string | null;
+    departureDate?: string | null;
+  }
+) {
+  booking.package = new Types.ObjectId(extras.packageId) as any;
+  booking.fixedDate = new Types.ObjectId(extras.fixedDateId) as any;
+  booking.totalPeople = extras.totalPeople;
+  booking.personalInfo = extras.personalInfos.map((info) => ({
+    fullName: info.fullName,
+    email: info.email,
+    country: info.country,
+    phoneNumber: info.phoneNumber,
+  })) as any;
+  booking.message = extras.message;
+  booking.selectedAddons = snapshot.selectedAddons;
+  booking.pricing = snapshot.pricing;
+  booking.addons = snapshot.addonIds;
+  booking.totalAmount = snapshot.totalAmount;
+  booking.currency = snapshot.currency;
+
+  if (extras.arrivalDate) {
+    booking.arrivalDate = new Date(extras.arrivalDate);
+  } else {
+    booking.arrivalDate = undefined;
+  }
+  if (extras.departureDate) {
+    booking.departureDate = new Date(extras.departureDate);
+  } else {
+    booking.departureDate = undefined;
+  }
+}
+
+async function sendBookingConfirmationEmail(
+  booking: BookingType,
+  quote: BookingQuoteResult
+): Promise<void> {
+  const packageDetails = await Package.findById(booking.package).select(
+    "name duration"
+  );
+  const personalInfos = booking.personalInfo || [];
+  const userEmails = personalInfos.map((p) => p.email.toLowerCase());
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const recipients = adminEmail
+    ? [...userEmails, adminEmail]
+    : [...userEmails];
+
+  const now = new Date();
+  const invoiceDate = now.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const dueDate = new Date(
+    Date.now() + 8 * 24 * 60 * 60 * 1000
+  ).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+
+  const startDate = booking.arrivalDate
+    ? booking.arrivalDate.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      })
+    : "N/A";
+  const endDate = booking.departureDate
+    ? booking.departureDate.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      })
+    : "N/A";
+
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayEnd = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1
+  );
+  const countToday = await Booking.countDocuments({
+    createdAt: { $gte: dayStart, $lt: dayEnd },
+  });
+  const invoiceDisplayNo = `08283-${dynamicNumber(countToday, 3)}`;
+
+  const discount = quote.fullBreakdown.discount;
+  const basePricePerPerson = discount.basePricePerPerson;
+  const discountPercentage = discount.discountPercent;
+  const originalTotal = basePricePerPerson * booking.totalPeople;
+  const discountAmount = originalTotal - quote.fullBreakdown.packageBase;
+
+  const invoicePayload = {
+    bookingReference: invoiceDisplayNo,
+    primaryContact: personalInfos[0],
+    invoiceDate,
+    dueDate,
+    startDate,
+    endDate,
+    packageName: packageDetails?.name || "Package",
+    duration: packageDetails?.duration || "N/A",
+    totalPeople: booking.totalPeople,
+    basePricePerPerson,
+    originalTotal,
+    discountPercentage,
+    discountAmount,
+    totalAmount: booking.totalAmount,
+    status: "CONFIRMED",
+  };
+
+  const html = bookingInvoiceTemplate(invoicePayload);
+  await sendEmail({
+    to: recipients,
+    subject: "Booking Confirmation",
+    html,
+  });
+}
+
+/**
+ * Create or update a lead booking (Proceed). Does not reserve seats.
+ */
 const createBooking = async (req: Request, res: Response) => {
   try {
     const {
@@ -41,35 +297,14 @@ const createBooking = async (req: Request, res: Response) => {
       totalPeople,
       package: packageId,
       message,
-      totalAmount,
-      createdBy,
-      customizedBooking,
+      paymentOption,
       addons,
+      bookingId,
     } = req.body;
-
-    // Validate required fields
-    const missingFields = [];
-    if (!personalInfo) missingFields.push("personalInfo");
-    if (!totalPeople) missingFields.push("totalPeople");
-    if (!packageId) missingFields.push("package");
-    if (!totalAmount) missingFields.push("totalAmount");
-    if (!fixedDateId) missingFields.push("fixedDateId");
-
-    if (missingFields.length > 0) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Missing required fields",
-        missingFields,
-        details: `The following fields are required: ${missingFields.join(
-          ", "
-        )}`,
-      });
-    }
 
     if (arrivalDate && departureDate) {
       const arrival = new Date(arrivalDate);
       const departure = new Date(departureDate);
-
       if (arrival.getTime() === departure.getTime()) {
         return res.status(400).json({
           status: "fail",
@@ -78,84 +313,9 @@ const createBooking = async (req: Request, res: Response) => {
       }
     }
 
-    let personal_infos = Array.isArray(personalInfo)
-      ? personalInfo
-      : [personalInfo];
+    const personalInfos = normalizePersonalInfo(personalInfo);
+    const addonSelections = normalizeAddonSelections(addons);
 
-    // Validate package
-    const existingPackage = await Package.findById(packageId);
-    if (!existingPackage) {
-      return res.status(404).json({
-        status: "fail",
-        message: "Package not found",
-      });
-    }
-
-    // Generate a unique booking reference
-    const generateBookingReference = (): string => {
-      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-      let result = "";
-      for (let i = 0; i < 8; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      return result;
-    };
-
-    // Resolve package offers: selected addons + defaults (once per booking)
-    const packageOffers = await PackageAddon.find({
-      package: packageId,
-      isActive: true,
-    }).populate("addon");
-
-    const activeOffers = packageOffers.filter((offer) => {
-      const catalog = offer.addon as any;
-      return catalog && !catalog.isDeleted && catalog.isActive !== false;
-    });
-
-    const offerByAddonId = new Map(
-      activeOffers.map((offer) => [offer.addon._id.toString(), offer])
-    );
-
-    let selectedAddonIds: Types.ObjectId[] = [];
-    if (addons && Array.isArray(addons)) {
-      selectedAddonIds = addons.map((addon: any) =>
-        typeof addon === "string"
-          ? new Types.ObjectId(addon)
-          : new Types.ObjectId(addon._id || addon.addonId || addon.id)
-      );
-
-      const missingAddons = selectedAddonIds.filter(
-        (id) => !offerByAddonId.has(id.toString())
-      );
-      if (missingAddons.length > 0) {
-        return res.status(400).json({
-          status: "fail",
-          message: "One or more addons are not available for this package",
-          missingAddons: missingAddons.map((id) => id.toString()),
-        });
-      }
-    }
-
-    const defaultOffers = activeOffers.filter((offer) => offer.isDefault);
-    const defaultAddonIds = defaultOffers.map(
-      (offer) => offer.addon._id as Types.ObjectId
-    );
-    const defaultAddonIdSet = new Set(
-      defaultAddonIds.map((id) => id.toString())
-    );
-
-    // Defaults are always included server-side; client cannot omit or control them
-    const optionalSelectedIds = selectedAddonIds.filter(
-      (id) => !defaultAddonIdSet.has(id.toString())
-    );
-
-    const addonIdSet = new Set<string>([
-      ...optionalSelectedIds.map((id) => id.toString()),
-      ...defaultAddonIds.map((id) => id.toString()),
-    ]);
-    const addonIds = [...addonIdSet].map((id) => new Types.ObjectId(id));
-
-    // Validate fixed date and seat availability
     const fixedDate = await FixedDate.findById(fixedDateId);
     if (!fixedDate) {
       return res.status(404).json({
@@ -173,228 +333,341 @@ const createBooking = async (req: Request, res: Response) => {
       });
     }
 
-    // Calculate total with discount
-    const {
-      basePricePerPerson,
-      totalPersons,
-      originalTotal,
-      discountPercentage,
-      discountAmount,
-      finalTotal,
-    } = await calculateTotalWithDiscount(packageId, fixedDateId, totalPeople);
-
-    // Start transaction
-    const session = await Booking.startSession();
-    session.startTransaction();
-
+    let quote: BookingQuoteResult;
     try {
-      // Reserve seats
-      const seatsReserved = await fixedDate.reserveSeats(totalPeople);
-      if (!seatsReserved) {
+      quote = await quoteBooking({
+        packageId,
+        fixedDateId,
+        totalPeople,
+        paymentOption,
+        addons: addonSelections,
+      });
+    } catch (error) {
+      if (error instanceof BookingQuoteError) {
+        return res.status(error.statusCode).json({
+          status: "fail",
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        });
+      }
+      throw error;
+    }
+
+    const snapshot = buildBookingPricingSnapshot(quote);
+    const extras = {
+      packageId,
+      fixedDateId,
+      totalPeople,
+      personalInfos,
+      message,
+      arrivalDate,
+      departureDate,
+    };
+
+    let booking: BookingType | null = null;
+
+    if (bookingId && Types.ObjectId.isValid(bookingId)) {
+      const existing = await Booking.findById(bookingId);
+      if (!existing) {
+        return res.status(404).json({
+          status: "fail",
+          message: "Lead booking not found",
+        });
+      }
+      if (existing.stage !== BookingStage.LEAD) {
+        return res.status(400).json({
+          status: "fail",
+          message: "Only lead bookings can be updated from Proceed",
+        });
+      }
+      applySnapshotToDoc(existing, snapshot, extras);
+      existing.stage = BookingStage.LEAD;
+      existing.status = BookingStatus.PENDING;
+      existing.paymentStatus = PaymentStatus.PENDING;
+      existing.seen = false;
+      booking = await existing.save();
+    } else {
+      booking = await Booking.create({
+        bookingReference: generateBookingReference(),
+        stage: BookingStage.LEAD,
+        status: BookingStatus.PENDING,
+        paymentStatus: PaymentStatus.PENDING,
+        seen: false,
+        package: packageId,
+        fixedDate: fixedDateId,
+        totalPeople,
+        personalInfo: personalInfos,
+        message,
+        selectedAddons: snapshot.selectedAddons,
+        pricing: snapshot.pricing,
+        addons: snapshot.addonIds,
+        totalAmount: snapshot.totalAmount,
+        currency: snapshot.currency,
+        ...(arrivalDate ? { arrivalDate: new Date(arrivalDate) } : {}),
+        ...(departureDate ? { departureDate: new Date(departureDate) } : {}),
+      });
+    }
+
+    await clearCacheByPrefix("bookings:");
+    await clearCacheByPrefix("");
+
+    return res.status(201).json({
+      status: "success",
+      message: "Lead booking saved",
+      data: {
+        booking,
+        publicView: quote.publicView,
+      },
+    });
+  } catch (error) {
+    logger.error(
+      { message: "Error creating lead booking", error },
+      "Lead booking error"
+    );
+    return res.status(500).json({
+      status: "error",
+      message: "Internal server error during booking process",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/**
+ * Promote a lead to booked: refresh snapshot, reserve seats, send email.
+ */
+const checkoutBooking = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  let reservedPeople = 0;
+  let fixedDateDoc: any = null;
+
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+
+    if (!Types.ObjectId.isValid(id)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid booking ID",
+      });
+    }
+
+    const booking = await Booking.findById(id).session(session);
+    if (!booking) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        status: "fail",
+        message: "Booking not found",
+      });
+    }
+
+    if (booking.stage === BookingStage.BOOKED) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(200).json({
+        status: "success",
+        message: "Booking already checked out",
+        data: { booking },
+      });
+    }
+
+    if (booking.stage !== BookingStage.LEAD) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: "fail",
+        message: "Only lead bookings can be checked out",
+      });
+    }
+
+    const packageId = (
+      body.package ||
+      booking.package?.toString()
+    ).toString();
+    const fixedDateId = (
+      body.fixedDateId ||
+      booking.fixedDate?.toString()
+    ).toString();
+    const totalPeople = Math.max(
+      1,
+      Math.floor(Number(body.totalPeople ?? booking.totalPeople) || 1)
+    );
+    const paymentOption =
+      body.paymentOption ||
+      booking.pricing?.paymentOption ||
+      "full";
+
+    let addonSelections: BookingQuoteAddonInput[];
+    if (body.addons !== undefined) {
+      addonSelections = normalizeAddonSelections(body.addons);
+    } else {
+      addonSelections = (booking.selectedAddons || [])
+        .filter((line) => !line.isDefault)
+        .map((line) => ({
+          id: line.addonId.toString(),
+          quantity: line.quantity,
+        }));
+    }
+
+    const personalInfos = body.personalInfo
+      ? normalizePersonalInfo(body.personalInfo)
+      : (booking.personalInfo as any as Traveler[]);
+
+    const arrivalDate =
+      body.arrivalDate !== undefined
+        ? body.arrivalDate
+        : booking.arrivalDate?.toISOString();
+    const departureDate =
+      body.departureDate !== undefined
+        ? body.departureDate
+        : booking.departureDate?.toISOString();
+    const message =
+      body.message !== undefined ? body.message : booking.message;
+
+    if (arrivalDate && departureDate) {
+      const arrival = new Date(arrivalDate);
+      const departure = new Date(departureDate);
+      if (arrival.getTime() === departure.getTime()) {
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
           status: "fail",
-          message: "Failed to reserve seats. Please try again.",
+          message: "Arrival and departure dates cannot be the same.",
         });
       }
+    }
 
-      // Create booking
-      const bookingPayload: any = {
-        personalInfo: personal_infos.map((info: Traveler) => ({
-          fullName: info.fullName,
-          email: info.email.toLowerCase(),
-          country: info.country,
-          phoneNumber: info.phoneNumber,
-        })),
+    let quote: BookingQuoteResult;
+    try {
+      quote = await quoteBooking({
+        packageId,
+        fixedDateId,
         totalPeople,
-        package: packageId,
-        addons: addonIds.length > 0 ? addonIds : undefined,
-        fixedDate: fixedDateId,
-        message,
-        createdBy,
-        bookingReference: generateBookingReference(),
-        status: BookingStatus.PENDING,
-        paymentStatus: PaymentStatus.PENDING,
-        currency: "USD",
-        totalAmount: finalTotal,
-      };
-
-      if (arrivalDate) {
-        bookingPayload.arrivalDate = new Date(arrivalDate);
-      }
-      if (departureDate) {
-        bookingPayload.departureDate = new Date(departureDate);
-      }
-
-      const newBookings = await Booking.create([bookingPayload], { session });
-
-      await session.commitTransaction();
-      session.endSession();
-
-      const newBooking = newBookings[0];
-
-      try {
-        // Send email to user(s) and admin
-        const packageDetails = await Package.findById(packageId).select(
-          "name duration"
-        );
-        const userEmails = personal_infos.map((p: any) =>
-          p.email.toLowerCase()
-        );
-        const adminEmail = process.env.ADMIN_EMAIL!;
-        const recipients = [...userEmails, adminEmail];
-
-        const now = new Date();
-        const invoiceDate = now.toLocaleDateString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        });
-
-        const dueDate = new Date(
-          Date.now() + 8 * 24 * 60 * 60 * 1000
-        ).toLocaleDateString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        });
-
-        const startDate = newBooking.arrivalDate
-          ? newBooking.arrivalDate.toLocaleDateString("en-US", {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            })
-          : "N/A";
-
-        const endDate = newBooking.departureDate
-          ? newBooking.departureDate.toLocaleDateString("en-US", {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            })
-          : "N/A";
-
-        // Get primary contact info
-        const primaryContact = personal_infos[0];
-
-        // Build invoice number as 08283-001
-        // We will use the count of bookings for the current day to keep numbers short/stable per day
-        const dayStart = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate()
-        );
-        const dayEnd = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() + 1
-        );
-        const countToday = await Booking.countDocuments({
-          createdAt: { $gte: dayStart, $lt: dayEnd },
-        });
-        const invoiceDisplayNo = `08283-${dynamicNumber(countToday, 3)}`;
-
-        const invoicePayload = {
-          bookingReference: invoiceDisplayNo,
-          primaryContact,
-          invoiceDate,
-          dueDate,
-          startDate,
-          endDate,
-          packageName: packageDetails?.name || "Package",
-          duration: packageDetails?.duration || "N/A",
-          totalPeople: newBooking.totalPeople,
-          basePricePerPerson,
-          originalTotal,
-          discountPercentage,
-          discountAmount,
-          totalAmount: newBooking.totalAmount,
-          status: "CONFIRMED",
-        };
-
-        const html = bookingInvoiceTemplate(invoicePayload);
-
-        await sendEmail({
-          to: recipients,
-          subject: "Booking Confirmation",
-          html,
-        });
-        await clearCacheByPrefix("bookings:");
-        await clearCacheByPrefix("");
-        res.status(201).json({
-          status: "success",
-          message: "Booking created successfully and email sent",
-          data: newBooking,
-        });
-      } catch (emailError) {
-        logger.error(
-          {
-            message: "Error sending booking email",
-            error:
-              emailError instanceof Error ? emailError.message : emailError,
-            bookingId: newBooking._id,
-          },
-          "Email sending failed"
-        );
-
-        await clearCacheByPrefix("bookings:");
-        res.status(201).json({
-          status: "success",
-          message: "Booking created but failed to send email",
-          data: newBooking,
-        });
-      }
-    } catch (error: any) {
+        paymentOption,
+        addons: addonSelections,
+      });
+    } catch (error) {
       await session.abortTransaction();
       session.endSession();
-
-      if (fixedDate && totalPeople) {
-        await fixedDate.releaseSeats(totalPeople);
+      if (error instanceof BookingQuoteError) {
+        return res.status(error.statusCode).json({
+          status: "fail",
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        });
       }
-      console.log("eror on booking", error);
+      throw error;
+    }
 
-      logger.error(
-        { message: "Booking creation failed", error },
-        "Error occurred during booking process"
-      );
+    const snapshot = buildBookingPricingSnapshot(quote);
 
-      let reason =
-        "We couldn’t complete your booking at the moment. Please try again later.";
-
-      if (error.name === "ValidationError") {
-        reason =
-          "Some booking details are missing or invalid. Please check and try again.";
-      } else if (error.code === 11000) {
-        // Duplicate booking case (MongoDB duplicate key error)
-        reason =
-          "This booking already exists. Please check your previous bookings.";
-      } else if (error.message?.includes("insufficient seats")) {
-        reason =
-          "Unfortunately, there are not enough seats available for your selected date.";
-      } else if (error.message?.includes("date expired")) {
-        reason =
-          "The selected travel date has already expired. Please choose another date.";
-      } else if (error.message?.includes("invalid package")) {
-        reason =
-          "The selected package is no longer available. Please choose a different one.";
-      }
-
-      res.status(400).json({
-        status: "error",
-        message: reason,
+    fixedDateDoc = await FixedDate.findById(fixedDateId).session(session);
+    if (!fixedDateDoc) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        status: "fail",
+        message: "No fixed date found for the selected date",
       });
     }
-  } catch (error) {
+
+    if (!fixedDateDoc.hasAvailableSeats(totalPeople)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: "fail",
+        message: "Not enough available seats for this date",
+        availableSeats: fixedDateDoc.availableSeats,
+        requiredSeats: totalPeople,
+      });
+    }
+
+    const seatsReserved = await fixedDateDoc.reserveSeats(totalPeople);
+    if (!seatsReserved) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: "fail",
+        message: "Failed to reserve seats. Please try again.",
+      });
+    }
+    reservedPeople = totalPeople;
+
+    applySnapshotToDoc(booking, snapshot, {
+      packageId,
+      fixedDateId,
+      totalPeople,
+      personalInfos,
+      message,
+      arrivalDate,
+      departureDate,
+    });
+    booking.stage = BookingStage.BOOKED;
+    booking.status = BookingStatus.PENDING;
+    booking.paymentStatus = PaymentStatus.PENDING;
+
+    await booking.save({ session });
+    await session.commitTransaction();
+    session.endSession();
+
+    let emailSent = true;
+    try {
+      await sendBookingConfirmationEmail(booking, quote);
+    } catch (emailError) {
+      emailSent = false;
+      logger.error(
+        {
+          message: "Error sending booking email",
+          error:
+            emailError instanceof Error ? emailError.message : emailError,
+          bookingId: booking._id,
+        },
+        "Email sending failed"
+      );
+    }
+
+    await clearCacheByPrefix("bookings:");
+    await clearCacheByPrefix("");
+
+    return res.status(200).json({
+      status: "success",
+      message: emailSent
+        ? "Booking confirmed and email sent"
+        : "Booking confirmed but failed to send email",
+      data: {
+        booking,
+        publicView: quote.publicView,
+      },
+    });
+  } catch (error: any) {
+    await session.abortTransaction();
+    session.endSession();
+
+    if (fixedDateDoc && reservedPeople > 0) {
+      try {
+        await fixedDateDoc.releaseSeats(reservedPeople);
+      } catch (releaseError) {
+        logger.error(
+          { message: "Failed to release seats after checkout error", releaseError },
+          "Seat release failed"
+        );
+      }
+    }
+
     logger.error(
-      { message: "Error in booking process", error },
-      "Booking process error"
+      { message: "Checkout failed", error },
+      "Error during booking checkout"
     );
-    res.status(500).json({
+
+    return res.status(400).json({
       status: "error",
-      message: "Internal server error during booking process",
-      error: error instanceof Error ? error.message : "Unknown error",
+      message:
+        error?.message ||
+        "We couldn’t complete your booking at the moment. Please try again later.",
     });
   }
 };
@@ -404,7 +677,19 @@ export const getAllBookings = async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 100;
     const skip = (page - 1) * limit;
-    const cacheKey = `bookings:page:${page}:limit:${limit}`;
+    const stageParam = String(req.query.stage || "booked").toLowerCase();
+    const stageFilter =
+      stageParam === BookingStage.LEAD
+        ? { stage: BookingStage.LEAD }
+        : {
+            $or: [
+              { stage: BookingStage.BOOKED },
+              { stage: { $exists: false } },
+              { stage: null },
+            ],
+          };
+
+    const cacheKey = `bookings:stage:${stageParam}:page:${page}:limit:${limit}`;
 
     const cached = await getCache<BookingCache>(cacheKey);
     if (cached && cached.data && cached.pagination) {
@@ -417,7 +702,7 @@ export const getAllBookings = async (req: Request, res: Response) => {
     }
 
     const [bookings, total] = await Promise.all([
-      Booking.find()
+      Booking.find(stageFilter)
         .populate({
           path: "package",
           select: "name duration pax location overview coverImage",
@@ -433,7 +718,7 @@ export const getAllBookings = async (req: Request, res: Response) => {
         .skip(skip)
         .limit(limit)
         .lean(),
-      Booking.countDocuments(),
+      Booking.countDocuments(stageFilter),
     ]);
 
     const totalPages = Math.ceil(total / limit);
@@ -450,7 +735,6 @@ export const getAllBookings = async (req: Request, res: Response) => {
       previousPage: hasPreviousPage ? page - 1 : null,
     };
 
-    // Cache the result
     await setCache(cacheKey, { data: bookings, pagination }, CACHE_TTL);
 
     res.status(200).json({
@@ -612,8 +896,8 @@ const cancelBooking = async (req: Request, res: Response) => {
     // Save the updated booking
     await booking.save({ session });
 
-    // Release the seats back to the fixed date availability
-    if (booking.fixedDate) {
+    // Release seats only if this booking had reserved them (booked stage)
+    if (booking.fixedDate && booking.stage === BookingStage.BOOKED) {
       const fixedDate = await FixedDate.findById(booking.fixedDate).session(
         session
       );
@@ -655,7 +939,10 @@ const cancelBooking = async (req: Request, res: Response) => {
 };
 
 const bookingController = {
+  previewBooking,
+  quoteBookingAdmin,
   createBooking,
+  checkoutBooking,
   getAllBookings,
   getBookingById,
   cancelBooking,

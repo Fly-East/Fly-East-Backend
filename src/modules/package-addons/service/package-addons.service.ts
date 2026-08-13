@@ -36,10 +36,17 @@ const toOptionalPositiveInt = (value: unknown): number | null => {
 
 const validateQuantities = (input: {
   isDefault?: boolean;
+  allowsQuantity?: boolean;
   defaultQuantity?: number;
   maxQuantity?: number | null;
 }) => {
+  const allowsQuantity = input.allowsQuantity ?? false;
   const isDefault = input.isDefault ?? false;
+
+  if (!allowsQuantity) {
+    return { defaultQuantity: 1, maxQuantity: null as number | null };
+  }
+
   const defaultQuantity = isDefault
     ? toPositiveInt(input.defaultQuantity, 1)
     : 1;
@@ -62,16 +69,12 @@ const validateQuantities = (input: {
 };
 
 const assertPricingCompatibleWithAddon = (
-  addon: {
-    costsParticipants?: boolean;
-    participantsPerQuantity?: number;
-  },
+  costsParticipants: boolean,
+  participantsPerQuantity: number,
   pricingType: string
 ) => {
-  const costsParticipants = addon.costsParticipants === true;
-  const hasParticipants = (addon.participantsPerQuantity ?? 0) > 0;
+  const hasParticipants = participantsPerQuantity > 0;
 
-  // perPerson + costsParticipants is allowed;
   // blocked only when all three apply: costs participants, has participants, and perPerson
   if (costsParticipants && hasParticipants && pricingType === "perPerson") {
     throw Object.assign(
@@ -89,6 +92,8 @@ export type CreatePackageAddonInput = {
   price: unknown;
   pricingType: string;
   isDefault?: unknown;
+  allowsQuantity?: unknown;
+  costsParticipants?: unknown;
   defaultQuantity?: unknown;
   maxQuantity?: unknown;
   isActive?: unknown;
@@ -99,6 +104,8 @@ export type UpdatePackageAddonInput = {
   price?: unknown;
   pricingType?: string;
   isDefault?: unknown;
+  allowsQuantity?: unknown;
+  costsParticipants?: unknown;
   defaultQuantity?: unknown;
   maxQuantity?: unknown;
   isActive?: unknown;
@@ -116,6 +123,8 @@ class PackageAddonsService {
       price,
       pricingType,
       isDefault,
+      allowsQuantity,
+      costsParticipants,
       defaultQuantity,
       maxQuantity,
       isActive,
@@ -157,11 +166,19 @@ class PackageAddonsService {
       throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
     }
 
-    assertPricingCompatibleWithAddon(addon, pricingType);
+    const resolvedAllowsQuantity = toBoolean(allowsQuantity);
+    const resolvedCostsParticipants = toBoolean(costsParticipants);
+
+    assertPricingCompatibleWithAddon(
+      resolvedCostsParticipants,
+      addon.participantsPerQuantity ?? 0,
+      pricingType
+    );
 
     const resolvedIsDefault = toBoolean(isDefault);
     const quantities = validateQuantities({
       isDefault: resolvedIsDefault,
+      allowsQuantity: resolvedAllowsQuantity,
       defaultQuantity: toPositiveInt(defaultQuantity, 1),
       maxQuantity: toOptionalPositiveInt(maxQuantity),
     });
@@ -182,6 +199,8 @@ class PackageAddonsService {
         price: Number(price),
         pricingType,
         isDefault: resolvedIsDefault,
+        allowsQuantity: resolvedAllowsQuantity,
+        costsParticipants: resolvedCostsParticipants,
         defaultQuantity: quantities.defaultQuantity,
         maxQuantity: quantities.maxQuantity,
         isActive: toBoolean(isActive, true),
@@ -245,8 +264,18 @@ class PackageAddonsService {
     packageAddonId: string,
     input: UpdatePackageAddonInput
   ): Promise<IPackageAddon> {
-    const { price, pricingType, isDefault, defaultQuantity, maxQuantity, isActive, sortOrder, addonId } =
-      input;
+    const {
+      price,
+      pricingType,
+      isDefault,
+      allowsQuantity,
+      costsParticipants,
+      defaultQuantity,
+      maxQuantity,
+      isActive,
+      sortOrder,
+      addonId,
+    } = input;
 
     if (
       pricingType !== undefined &&
@@ -281,6 +310,14 @@ class PackageAddonsService {
       addonId !== undefined ? addonId : String(existing.addon);
     const resolvedPricingType =
       pricingType !== undefined ? pricingType : existing.pricingType;
+    const resolvedCostsParticipants =
+      costsParticipants !== undefined
+        ? toBoolean(costsParticipants)
+        : existing.costsParticipants === true;
+    const resolvedAllowsQuantity =
+      allowsQuantity !== undefined
+        ? toBoolean(allowsQuantity)
+        : existing.allowsQuantity === true;
 
     const catalogAddon = await Addons.findOne({
       _id: resolvedAddonId,
@@ -289,7 +326,11 @@ class PackageAddonsService {
     if (!catalogAddon) {
       throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
     }
-    assertPricingCompatibleWithAddon(catalogAddon, resolvedPricingType);
+    assertPricingCompatibleWithAddon(
+      resolvedCostsParticipants,
+      catalogAddon.participantsPerQuantity ?? 0,
+      resolvedPricingType
+    );
 
     const resolvedIsDefault =
       isDefault !== undefined ? toBoolean(isDefault) : existing.isDefault;
@@ -299,6 +340,7 @@ class PackageAddonsService {
         : existing.maxQuantity;
     const quantities = validateQuantities({
       isDefault: resolvedIsDefault,
+      allowsQuantity: resolvedAllowsQuantity,
       defaultQuantity:
         defaultQuantity !== undefined
           ? toPositiveInt(defaultQuantity, existing.defaultQuantity)
@@ -314,6 +356,12 @@ class PackageAddonsService {
           ...(pricingType !== undefined && { pricingType }),
           ...(isDefault !== undefined && {
             isDefault: resolvedIsDefault,
+          }),
+          ...(allowsQuantity !== undefined && {
+            allowsQuantity: resolvedAllowsQuantity,
+          }),
+          ...(costsParticipants !== undefined && {
+            costsParticipants: resolvedCostsParticipants,
           }),
           defaultQuantity: quantities.defaultQuantity,
           maxQuantity: quantities.maxQuantity,
