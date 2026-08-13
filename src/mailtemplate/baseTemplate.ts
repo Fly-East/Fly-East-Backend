@@ -192,7 +192,7 @@ export const buildBaseEmail = ({
     <body>
       <div class="container">
         <div class="header">
-          <img src="https://flyeastnepal.com/logo/navlogo.png" alt="Fly East Nepal Logo" />
+          <img src="https://flyeastnepal.com/logo/nav1.png" alt="Fly East Nepal Logo" />
           <h1>${title}</h1>
         </div>
         <div class="content">
