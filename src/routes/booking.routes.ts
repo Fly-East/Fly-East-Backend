@@ -6,6 +6,9 @@ const {
   quoteBookingAdmin,
   createBooking,
   checkoutBooking,
+  previewFinalQuote,
+  finalizeQuote,
+  getPublicQuote,
   getAllBookings,
   getBookingById,
   updateBookingStatus,
@@ -19,6 +22,8 @@ import {
   bookingQuoteSchema,
   bookingLeadSchema,
   bookingCheckoutSchema,
+  bookingFinalQuoteSchema,
+  publicQuoteTokenSchema,
 } from "../schema/bookingQuote.schema";
 
 const router = Router();
@@ -42,6 +47,28 @@ router.post(
   "/api/v1/booking/:id/checkout",
   validate(bookingCheckoutSchema),
   checkoutBooking
+);
+
+router.post(
+  "/api/v1/booking/:id/final-quote/preview",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(bookingFinalQuoteSchema),
+  previewFinalQuote
+);
+
+router.post(
+  "/api/v1/booking/:id/final-quote",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(bookingFinalQuoteSchema),
+  finalizeQuote
+);
+
+router.get(
+  "/api/v1/quote/:token",
+  validate(publicQuoteTokenSchema),
+  getPublicQuote
 );
 
 router.get("/api/v1/booking", isAdmin, getAllBookings);

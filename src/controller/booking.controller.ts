@@ -6,15 +6,15 @@ import {
   PaymentStatus,
   BookingStage,
   BookingType,
+  QuoteStatus,
 } from "../types/booking.type";
 import Package from "../models/package.model";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 import { FixedDate } from "../models";
 import { sendEmail } from "../modules/email";
-import { dynamicNumber } from "../templates/invoiceTemplate";
 import { Traveler } from "../service/email.service";
-import { bookingInvoiceTemplate } from "../mailtemplate";
+import { finalQuoteEmailTemplate } from "../mailtemplate";
 import {
   BookingQuoteError,
   quoteBooking,
@@ -23,8 +23,14 @@ import {
 } from "../service/bookingQuote.service";
 import {
   buildBookingPricingSnapshot,
+  recalculateFromDraft,
+  snapshotFromBookingEstimate,
+  toPublicView,
   type BookingPricingSnapshotPayload,
+  type FinalQuoteAddonDraft,
 } from "../service/bookingPricingSnapshot.service";
+import { FRONTEND_URL, FRONTEND_BASE_URL } from "../configs/env";
+import crypto from "crypto";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -198,92 +204,6 @@ function applySnapshotToDoc(
   }
 }
 
-async function sendBookingConfirmationEmail(
-  booking: BookingType,
-  quote: BookingQuoteResult
-): Promise<void> {
-  const packageDetails = await Package.findById(booking.package).select(
-    "name duration"
-  );
-  const personalInfos = booking.personalInfo || [];
-  const userEmails = personalInfos.map((p) => p.email.toLowerCase());
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const recipients = adminEmail
-    ? [...userEmails, adminEmail]
-    : [...userEmails];
-
-  const now = new Date();
-  const invoiceDate = now.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-  const dueDate = new Date(
-    Date.now() + 8 * 24 * 60 * 60 * 1000
-  ).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-
-  const startDate = booking.arrivalDate
-    ? booking.arrivalDate.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      })
-    : "N/A";
-  const endDate = booking.departureDate
-    ? booking.departureDate.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      })
-    : "N/A";
-
-  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const dayEnd = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() + 1
-  );
-  const countToday = await Booking.countDocuments({
-    createdAt: { $gte: dayStart, $lt: dayEnd },
-  });
-  const invoiceDisplayNo = `08283-${dynamicNumber(countToday, 3)}`;
-
-  const discount = quote.fullBreakdown.discount;
-  const basePricePerPerson = discount.basePricePerPerson;
-  const discountPercentage = discount.discountPercent;
-  const originalTotal = basePricePerPerson * booking.totalPeople;
-  const discountAmount = originalTotal - quote.fullBreakdown.packageBase;
-
-  const invoicePayload = {
-    bookingReference: invoiceDisplayNo,
-    primaryContact: personalInfos[0],
-    invoiceDate,
-    dueDate,
-    startDate,
-    endDate,
-    packageName: packageDetails?.name || "Package",
-    duration: packageDetails?.duration || "N/A",
-    totalPeople: booking.totalPeople,
-    basePricePerPerson,
-    originalTotal,
-    discountPercentage,
-    discountAmount,
-    totalAmount: booking.totalAmount,
-    status: "CONFIRMED",
-  };
-
-  const html = bookingInvoiceTemplate(invoicePayload);
-  await sendEmail({
-    to: recipients,
-    subject: "Booking Confirmation",
-    html,
-  });
-}
-
 /**
  * Create or update a lead booking (Proceed). Does not reserve seats.
  */
@@ -393,6 +313,8 @@ const createBooking = async (req: Request, res: Response) => {
         status: BookingStatus.PENDING,
         paymentStatus: PaymentStatus.PENDING,
         seen: false,
+        quoteStatus: QuoteStatus.ESTIMATED,
+        seatsReserved: false,
         package: packageId,
         fixedDate: fixedDateId,
         totalPeople,
@@ -432,85 +354,87 @@ const createBooking = async (req: Request, res: Response) => {
   }
 };
 
+function estimatePublicView(booking: BookingType, packageName: string) {
+  const snapshot = snapshotFromBookingEstimate(booking);
+  if (!snapshot) return null;
+  return toPublicView(snapshot, packageName);
+}
+
+function hashQuoteToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function createQuoteToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function draftAddonsFromBody(addons: unknown): FinalQuoteAddonDraft[] {
+  if (!Array.isArray(addons)) return [];
+  return addons.map((item: any) => ({
+    id: item.id ? String(item.id) : undefined,
+    name: String(item.name || "Addon"),
+    quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+    unitPrice: Math.max(0, Number(item.unitPrice) || 0),
+    pricingType: item.pricingType,
+    isDefault: Boolean(item.isDefault),
+    allowsQuantity: Boolean(item.allowsQuantity),
+    costsParticipants: Boolean(item.costsParticipants),
+    participantsPerQuantity: Math.max(
+      0,
+      Number(item.participantsPerQuantity) || 0
+    ),
+  }));
+}
+
 /**
- * Promote a lead to booked: refresh snapshot, reserve seats, send email.
+ * Promote a lead to booked. Keeps the estimated snapshot. No seats, no invoice.
  */
 const checkoutBooking = async (req: Request, res: Response) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  let reservedPeople = 0;
-  let fixedDateDoc: any = null;
-
   try {
     const { id } = req.params;
     const body = req.body || {};
 
     if (!Types.ObjectId.isValid(id)) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         status: "fail",
         message: "Invalid booking ID",
       });
     }
 
-    const booking = await Booking.findById(id).session(session);
+    const booking = await Booking.findById(id).populate("package", "name");
     if (!booking) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({
         status: "fail",
         message: "Booking not found",
       });
     }
 
+    const packageName =
+      (booking.package as any)?.name || "Package";
+
     if (booking.stage === BookingStage.BOOKED) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(200).json({
         status: "success",
-        message: "Booking already checked out",
-        data: { booking },
+        message: "Booking already submitted",
+        data: {
+          booking,
+          publicView: estimatePublicView(booking, packageName),
+        },
       });
     }
 
     if (booking.stage !== BookingStage.LEAD) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         status: "fail",
-        message: "Only lead bookings can be checked out",
+        message: "Only lead bookings can be submitted",
       });
     }
 
-    const packageId = (
-      body.package ||
-      booking.package?.toString()
-    ).toString();
-    const fixedDateId = (
-      body.fixedDateId ||
-      booking.fixedDate?.toString()
-    ).toString();
-    const totalPeople = Math.max(
-      1,
-      Math.floor(Number(body.totalPeople ?? booking.totalPeople) || 1)
-    );
-    const paymentOption =
-      body.paymentOption ||
-      booking.pricing?.paymentOption ||
-      "full";
-
-    let addonSelections: BookingQuoteAddonInput[];
-    if (body.addons !== undefined) {
-      addonSelections = normalizeAddonSelections(body.addons);
-    } else {
-      addonSelections = (booking.selectedAddons || [])
-        .filter((line) => !line.isDefault)
-        .map((line) => ({
-          id: line.addonId.toString(),
-          quantity: line.quantity,
-        }));
+    if (!booking.pricing) {
+      return res.status(400).json({
+        status: "fail",
+        message: "This booking has no estimated pricing. Please proceed again.",
+      });
     }
 
     const personalInfos = body.personalInfo
@@ -532,8 +456,6 @@ const checkoutBooking = async (req: Request, res: Response) => {
       const arrival = new Date(arrivalDate);
       const departure = new Date(departureDate);
       if (arrival.getTime() === departure.getTime()) {
-        await session.abortTransaction();
-        session.endSession();
         return res.status(400).json({
           status: "fail",
           message: "Arrival and departure dates cannot be the same.",
@@ -541,122 +463,36 @@ const checkoutBooking = async (req: Request, res: Response) => {
       }
     }
 
-    let quote: BookingQuoteResult;
-    try {
-      quote = await quoteBooking({
-        packageId,
-        fixedDateId,
-        totalPeople,
-        paymentOption,
-        addons: addonSelections,
-      });
-    } catch (error) {
-      await session.abortTransaction();
-      session.endSession();
-      if (error instanceof BookingQuoteError) {
-        return res.status(error.statusCode).json({
-          status: "fail",
-          message: error.message,
-          ...(error.details ? { details: error.details } : {}),
-        });
-      }
-      throw error;
-    }
+    booking.personalInfo = personalInfos.map((info) => ({
+      fullName: info.fullName,
+      email: info.email,
+      country: info.country,
+      phoneNumber: info.phoneNumber,
+    })) as any;
+    booking.message = message;
+    if (arrivalDate) booking.arrivalDate = new Date(arrivalDate);
+    if (departureDate) booking.departureDate = new Date(departureDate);
 
-    const snapshot = buildBookingPricingSnapshot(quote);
-
-    fixedDateDoc = await FixedDate.findById(fixedDateId).session(session);
-    if (!fixedDateDoc) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        status: "fail",
-        message: "No fixed date found for the selected date",
-      });
-    }
-
-    if (!fixedDateDoc.hasAvailableSeats(totalPeople)) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        status: "fail",
-        message: "Not enough available seats for this date",
-        availableSeats: fixedDateDoc.availableSeats,
-        requiredSeats: totalPeople,
-      });
-    }
-
-    const seatsReserved = await fixedDateDoc.reserveSeats(totalPeople);
-    if (!seatsReserved) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        status: "fail",
-        message: "Failed to reserve seats. Please try again.",
-      });
-    }
-    reservedPeople = totalPeople;
-
-    applySnapshotToDoc(booking, snapshot, {
-      packageId,
-      fixedDateId,
-      totalPeople,
-      personalInfos,
-      message,
-      arrivalDate,
-      departureDate,
-    });
     booking.stage = BookingStage.BOOKED;
+    booking.quoteStatus = QuoteStatus.ESTIMATED;
     booking.status = BookingStatus.PENDING;
     booking.paymentStatus = PaymentStatus.PENDING;
+    booking.seatsReserved = false;
+    booking.seen = false;
 
-    await booking.save({ session });
-    await session.commitTransaction();
-    session.endSession();
-
-    let emailSent = true;
-    try {
-      await sendBookingConfirmationEmail(booking, quote);
-    } catch (emailError) {
-      emailSent = false;
-      logger.error(
-        {
-          message: "Error sending booking email",
-          error:
-            emailError instanceof Error ? emailError.message : emailError,
-          bookingId: booking._id,
-        },
-        "Email sending failed"
-      );
-    }
-
+    await booking.save();
     await clearCacheByPrefix("bookings:");
     await clearCacheByPrefix("");
 
     return res.status(200).json({
       status: "success",
-      message: emailSent
-        ? "Booking confirmed and email sent"
-        : "Booking confirmed but failed to send email",
+      message: "Booking submitted. We'll send a finalized quote soon.",
       data: {
         booking,
-        publicView: quote.publicView,
+        publicView: estimatePublicView(booking, packageName),
       },
     });
   } catch (error: any) {
-    await session.abortTransaction();
-    session.endSession();
-
-    if (fixedDateDoc && reservedPeople > 0) {
-      try {
-        await fixedDateDoc.releaseSeats(reservedPeople);
-      } catch (releaseError) {
-        logger.error(
-          { message: "Failed to release seats after checkout error", releaseError },
-          "Seat release failed"
-        );
-      }
-    }
 
     logger.error(
       { message: "Checkout failed", error },
@@ -892,12 +728,17 @@ const cancelBooking = async (req: Request, res: Response) => {
     booking.cancellationReason = reason || "No reason provided";
     booking.cancelledAt = new Date();
     booking.cancelledBy = userId;
+    if (booking.quoteStatus === QuoteStatus.QUOTED) {
+      booking.quoteStatus = QuoteStatus.EXPIRED;
+      booking.quoteTokenHash = undefined;
+      booking.quoteTokenExpiresAt = undefined;
+    }
 
     // Save the updated booking
     await booking.save({ session });
 
-    // Release seats only if this booking had reserved them (booked stage)
-    if (booking.fixedDate && booking.stage === BookingStage.BOOKED) {
+    // Release seats only if this booking had reserved them
+    if (booking.fixedDate && booking.seatsReserved) {
       const fixedDate = await FixedDate.findById(booking.fixedDate).session(
         session
       );
@@ -905,6 +746,8 @@ const cancelBooking = async (req: Request, res: Response) => {
         const totalTravelers = booking.totalPeople;
         await fixedDate.releaseSeats(totalTravelers);
         await fixedDate.save({ session });
+        booking.seatsReserved = false;
+        await booking.save({ session });
       }
     }
 
@@ -938,11 +781,295 @@ const cancelBooking = async (req: Request, res: Response) => {
   }
 };
 
+const buildFinalSnapshotFromRequest = (
+  booking: BookingType,
+  body: any
+): BookingPricingSnapshotPayload => {
+  const tripDays =
+    booking.pricing?.tripDays ||
+    booking.finalPricing?.tripDays ||
+    1;
+  return recalculateFromDraft({
+    totalPeople: booking.totalPeople,
+    tripDays,
+    paymentOption: body.paymentOption || booking.pricing?.paymentOption || "full",
+    basePricePerPerson: Number(body.basePricePerPerson),
+    discountPercent: Number(body.discountPercent),
+    currency: booking.currency || booking.pricing?.currency || "USD",
+    addons: draftAddonsFromBody(body.addons),
+  });
+};
+
+const previewFinalQuote = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ status: "fail", message: "Invalid booking ID" });
+    }
+
+    const booking = await Booking.findById(id).populate("package", "name");
+    if (!booking) {
+      return res.status(404).json({ status: "fail", message: "Booking not found" });
+    }
+
+    const snapshot = buildFinalSnapshotFromRequest(booking, req.body || {});
+    const packageName = (booking.package as any)?.name || "Package";
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        ...toPublicView(snapshot, packageName),
+        ...snapshot.pricing,
+        discount: {
+          basePricePerPerson: snapshot.pricing.basePricePerPerson,
+          discountPercent: snapshot.pricing.discountPercent,
+          appliedPaxRange: snapshot.pricing.appliedPaxRange,
+        },
+        addonLines: snapshot.selectedAddons.map((line) => ({
+          id: line.addonId?.toString() || line.name,
+          name: line.name,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          pricingType: line.pricingType,
+          isDefault: line.isDefault,
+          costsParticipants: line.costsParticipants,
+          participantsPerQuantity: line.participantsPerQuantity,
+          extraPeopleFromLine: line.extraPeopleFromLine,
+          includedPeopleFromLine: line.includedPeopleFromLine,
+          lineTotal: line.lineTotal,
+          formula: line.formula,
+          includedFormula: line.includedFormula,
+        })),
+        total: snapshot.pricing.amountDueNow,
+      },
+    });
+  } catch (error) {
+    logger.error("Error previewing final quote:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Failed to preview final quote",
+    });
+  }
+};
+
+const finalizeQuote = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  let reservedPeople = 0;
+  let fixedDateDoc: any = null;
+  let committed = false;
+
+  try {
+    const { id } = req.params;
+    if (!Types.ObjectId.isValid(id)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ status: "fail", message: "Invalid booking ID" });
+    }
+
+    const booking = await Booking.findById(id).session(session);
+    if (!booking) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ status: "fail", message: "Booking not found" });
+    }
+
+    if (booking.status === BookingStatus.CANCELLED) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        status: "fail",
+        message: "Cannot quote a cancelled booking",
+      });
+    }
+
+    const snapshot = buildFinalSnapshotFromRequest(booking, req.body || {});
+    const pkg = await Package.findById(booking.package).select("name");
+    const packageName = (pkg as any)?.name || "Package";
+    const publicView = toPublicView(snapshot, packageName);
+
+    if (!booking.seatsReserved) {
+      fixedDateDoc = await FixedDate.findById(booking.fixedDate).session(session);
+      if (!fixedDateDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({
+          status: "fail",
+          message: "Fixed date not found",
+        });
+      }
+      if (!fixedDateDoc.hasAvailableSeats(booking.totalPeople)) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          status: "fail",
+          message: "Not enough available seats for this date",
+          availableSeats: fixedDateDoc.availableSeats,
+          requiredSeats: booking.totalPeople,
+        });
+      }
+      const ok = await fixedDateDoc.reserveSeats(booking.totalPeople);
+      if (!ok) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          status: "fail",
+          message: "Failed to reserve seats. Please try again.",
+        });
+      }
+      reservedPeople = booking.totalPeople;
+      booking.seatsReserved = true;
+    }
+
+    const rawToken = createQuoteToken();
+    const expires = new Date();
+    expires.setDate(expires.getDate() + 14);
+
+    booking.finalPricing = snapshot.pricing;
+    booking.finalSelectedAddons = snapshot.selectedAddons;
+    booking.quoteStatus = QuoteStatus.QUOTED;
+    booking.finalizedAt = new Date();
+    if (req.user?._id || req.user?.userId) {
+      const actorId = String(req.user._id || req.user.userId);
+      if (Types.ObjectId.isValid(actorId)) {
+        booking.finalizedBy = new Types.ObjectId(actorId);
+      }
+    }
+    booking.quoteTokenHash = hashQuoteToken(rawToken);
+    booking.quoteTokenExpiresAt = expires;
+    booking.totalAmount = snapshot.totalAmount;
+    booking.currency = snapshot.currency;
+
+    await booking.save({ session });
+    await session.commitTransaction();
+    committed = true;
+    session.endSession();
+
+    const origin = (FRONTEND_BASE_URL || FRONTEND_URL || "").replace(/\/$/, "");
+    const quoteUrl = `${origin}/quote/${rawToken}`;
+
+    let emailSent = true;
+    try {
+      for (const person of booking.personalInfo || []) {
+        const html = finalQuoteEmailTemplate({
+          recipientName: person.fullName,
+          publicView,
+          quoteUrl,
+          bookingReference: booking.bookingReference,
+        });
+        await sendEmail({
+          to: [person.email],
+          subject: `Your quote for ${packageName}`,
+          html,
+        });
+      }
+    } catch (emailError) {
+      emailSent = false;
+      logger.error(
+        {
+          message: "Error sending final quote email",
+          error: emailError instanceof Error ? emailError.message : emailError,
+          bookingId: booking._id,
+        },
+        "Final quote email failed"
+      );
+    }
+
+    await clearCacheByPrefix("bookings:");
+    await clearCacheByPrefix("");
+
+    return res.status(200).json({
+      status: "success",
+      message: emailSent
+        ? "Final quote saved and emailed"
+        : "Final quote saved but email failed",
+      data: {
+        publicView,
+        quoteUrl,
+      },
+    });
+  } catch (error: any) {
+    if (!committed) {
+      try {
+        await session.abortTransaction();
+        session.endSession();
+      } catch {
+        /* ignore */
+      }
+      if (reservedPeople > 0 && fixedDateDoc) {
+        try {
+          await fixedDateDoc.releaseSeats(reservedPeople);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    logger.error("Error finalizing quote:", error);
+    return res.status(500).json({
+      status: "error",
+      message: error?.message || "Failed to finalize quote",
+    });
+  }
+};
+
+const getPublicQuote = async (req: Request, res: Response) => {
+  try {
+    const token = String(req.params.token || "");
+    if (!token || token.length < 16) {
+      return res.status(404).json({ status: "fail", message: "Quote not found" });
+    }
+
+    const hash = hashQuoteToken(token);
+    const booking = await Booking.findOne({ quoteTokenHash: hash }).populate(
+      "package",
+      "name"
+    );
+
+    if (!booking || !booking.finalPricing) {
+      return res.status(404).json({ status: "fail", message: "Quote not found" });
+    }
+
+    if (booking.quoteStatus !== QuoteStatus.QUOTED) {
+      return res.status(404).json({ status: "fail", message: "Quote not found" });
+    }
+
+    if (
+      booking.quoteTokenExpiresAt &&
+      booking.quoteTokenExpiresAt.getTime() < Date.now()
+    ) {
+      return res.status(410).json({ status: "fail", message: "This quote has expired" });
+    }
+
+    const packageName = (booking.package as any)?.name || "Package";
+    const publicView = toPublicView(
+      {
+        pricing: booking.finalPricing,
+        selectedAddons: booking.finalSelectedAddons || [],
+      },
+      packageName
+    );
+
+    return res.status(200).json({
+      status: "success",
+      data: publicView,
+    });
+  } catch (error) {
+    logger.error("Error fetching public quote:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Failed to load quote",
+    });
+  }
+};
+
 const bookingController = {
   previewBooking,
   quoteBookingAdmin,
   createBooking,
   checkoutBooking,
+  previewFinalQuote,
+  finalizeQuote,
+  getPublicQuote,
   getAllBookings,
   getBookingById,
   cancelBooking,

@@ -70,3 +70,35 @@ export type BookingPreviewInput = z.infer<typeof bookingPreviewSchema>;
 export type BookingQuoteSchemaInput = z.infer<typeof bookingQuoteSchema>;
 export type BookingLeadInput = z.infer<typeof bookingLeadSchema>;
 export type BookingCheckoutInput = z.infer<typeof bookingCheckoutSchema>;
+
+const finalQuoteAddonDraft = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  quantity: z.number().int().min(1),
+  unitPrice: z.number().min(0),
+  pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
+  isDefault: z.boolean().optional(),
+  allowsQuantity: z.boolean().optional(),
+  costsParticipants: z.boolean().optional(),
+  participantsPerQuantity: z.number().min(0).optional(),
+});
+
+export const bookingFinalQuoteSchema = z.object({
+  body: z.object({
+    basePricePerPerson: z.number().min(0),
+    discountPercent: z.number().min(0).max(100),
+    paymentOption: z.enum(["full", "partial"]).optional().default("full"),
+    addons: z.array(finalQuoteAddonDraft).optional().default([]),
+  }),
+  params: z.object({
+    id: z.string().min(1),
+  }),
+});
+
+export const publicQuoteTokenSchema = z.object({
+  params: z.object({
+    token: z.string().min(16),
+  }),
+});
+
+export type BookingFinalQuoteInput = z.infer<typeof bookingFinalQuoteSchema>;

@@ -23,8 +23,15 @@ export const BookingStage = {
 } as const;
 export type BookingStage = (typeof BookingStage)[keyof typeof BookingStage];
 
+export const QuoteStatus = {
+  ESTIMATED: "estimated",
+  QUOTED: "quoted",
+  EXPIRED: "expired",
+} as const;
+export type QuoteStatus = (typeof QuoteStatus)[keyof typeof QuoteStatus];
+
 export type BookingSelectedAddonSnapshot = {
-  addonId: Types.ObjectId;
+  addonId?: Types.ObjectId;
   name: string;
   quantity: number;
   unitPrice: number;
@@ -50,6 +57,7 @@ export type BookingPricingSnapshot = {
     min: number;
     max: number;
     discount: number;
+    source?: "package" | "manual";
   };
   pricePerPerson: number;
   packageBase: number;
@@ -92,5 +100,13 @@ export interface BookingType extends Document {
   addons?: Types.ObjectId[];
   selectedAddons?: BookingSelectedAddonSnapshot[];
   pricing?: BookingPricingSnapshot;
+  finalSelectedAddons?: BookingSelectedAddonSnapshot[];
+  finalPricing?: BookingPricingSnapshot;
+  quoteStatus: QuoteStatus;
+  finalizedAt?: Date;
+  finalizedBy?: Types.ObjectId;
+  quoteTokenHash?: string;
+  quoteTokenExpiresAt?: Date;
+  seatsReserved?: boolean;
   seen: boolean;
 }

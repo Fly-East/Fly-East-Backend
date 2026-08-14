@@ -10,6 +10,7 @@ import { forgotPasswordTemplate } from "./forgotPassword";
 import { inquiryNotificationTemplate } from "./inquiryNotification";
 import { inquiryReplyTemplate } from "./inquiryReply";
 import { contactReplyTemplate } from "./contactReply";
+import { finalQuoteEmailTemplate } from "./finalQuote";
 
 export {
   bookingConfirmationOwnerTemplate,
@@ -22,6 +23,7 @@ export {
   contactReplyTemplate,
   inquiryNotificationTemplate,
   inquiryReplyTemplate,
+  finalQuoteEmailTemplate,
 };
 
 export const renderMailTemplate = (
