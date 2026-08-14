@@ -4,6 +4,7 @@ import {
   BookingStatus,
   PaymentStatus,
   BookingStage,
+  QuoteStatus,
 } from "../types/booking.type";
 import { ADDON_PRICING_TYPE_VALUES } from "../modules/addons/constants/addons.constants";
 
@@ -12,7 +13,7 @@ const SelectedAddonSnapshotSchema = new Schema(
     addonId: {
       type: Schema.Types.ObjectId,
       ref: "Addons",
-      required: true,
+      required: false,
     },
     name: { type: String, required: true, trim: true },
     quantity: { type: Number, required: true, min: 1 },
@@ -53,6 +54,11 @@ const PricingSnapshotSchema = new Schema(
         min: { type: Number, required: true },
         max: { type: Number, required: true },
         discount: { type: Number, required: true },
+        source: {
+          type: String,
+          enum: ["package", "manual"],
+          required: false,
+        },
       },
       required: false,
     },
@@ -103,6 +109,38 @@ const BookingSchema = new Schema<BookingType>(
     pricing: {
       type: PricingSnapshotSchema,
       required: false,
+    },
+    finalSelectedAddons: {
+      type: [SelectedAddonSnapshotSchema],
+      default: undefined,
+    },
+    finalPricing: {
+      type: PricingSnapshotSchema,
+      required: false,
+    },
+    quoteStatus: {
+      type: String,
+      enum: Object.values(QuoteStatus),
+      default: QuoteStatus.ESTIMATED,
+      required: true,
+    },
+    finalizedAt: {
+      type: Date,
+    },
+    finalizedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    quoteTokenHash: {
+      type: String,
+      trim: true,
+    },
+    quoteTokenExpiresAt: {
+      type: Date,
+    },
+    seatsReserved: {
+      type: Boolean,
+      default: false,
     },
     status: {
       type: String,
@@ -219,6 +257,10 @@ BookingSchema.index({ status: 1 });
 BookingSchema.index({ paymentStatus: 1 });
 BookingSchema.index({ arrivalDate: 1, departureDate: 1 });
 BookingSchema.index({ stage: 1, seen: 1 });
+BookingSchema.index(
+  { quoteTokenHash: 1 },
+  { unique: true, sparse: true }
+);
 
 const Booking = model<BookingType>("Booking", BookingSchema);
 export default Booking;
