@@ -21,6 +21,9 @@ export const updateDetailedItinerarySchema = z.object({
 
 export const deleteDetailedItinerarySchema = idParamsSchema;
 
+// Used for fetching a single detailed itinerary by ID
+export const getDetailedItineraryByIdSchema = idParamsSchema;
+
 export const requestDetailedItinerarySchema = z.object({
   body: z.object({
     detailedItineraryId: z

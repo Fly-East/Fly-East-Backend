@@ -81,14 +81,6 @@ export const createDetailedItinerary = async (req: Request, res: Response) => {
       });
     }
 
-    const existing = await DetailedItinerary.findOne({ package: packageId });
-    if (existing) {
-      return res.status(409).json({
-        status: "fail",
-        message: "A detailed itinerary already exists for this package",
-      });
-    }
-
     const uploadedPdf = await uploadOnCloudinary(file.buffer, {
       filename: file.originalname,
       contentType: file.mimetype,
@@ -106,6 +98,20 @@ export const createDetailedItinerary = async (req: Request, res: Response) => {
       publicId: uploadedPdf.public_id,
       resourceType: uploadedPdf.resource_type ?? "raw",
     };
+
+    const existing = await DetailedItinerary.findOne({ package: packageId });
+    if (existing) {
+      // Treat duplicate create as replace to keep admin upload resilient.
+      await deleteImage(existing.pdf.publicId).catch(() => undefined);
+      existing.pdf = pdfPayload;
+      await existing.save();
+      await clearCacheByPrefix("");
+      return res.status(200).json({
+        status: "success",
+        message: "Detailed itinerary replaced",
+        data: buildPayload(existing),
+      });
+    }
 
     const newDocument = await DetailedItinerary.create({
       package: packageId,
@@ -237,6 +243,42 @@ export const deleteDetailedItinerary = async (req: Request, res: Response) => {
     return res.status(500).json({
       status: "error",
       message: error.message || "Failed to delete detailed itinerary",
+    });
+  }
+};
+
+export const getDetailedItinerary = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid detailed itinerary ID",
+      });
+    }
+
+    const detail = await DetailedItinerary.findById(id).populate(
+      "package",
+      "name slug coverImage"
+    );
+
+    if (!detail) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Detailed itinerary not found",
+      });
+    }
+
+    return res.status(200).json({
+      status: "success",
+      data: buildPayload(detail),
+    });
+  } catch (error: any) {
+    logger.error("Get detailed itinerary failed:", error);
+    return res.status(500).json({
+      status: "error",
+      message: error.message || "Failed to fetch detailed itinerary",
     });
   }
 };
