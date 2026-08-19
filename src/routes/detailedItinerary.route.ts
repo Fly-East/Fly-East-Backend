@@ -9,11 +9,13 @@ import {
   requestDetailedItinerarySchema,
   getDetailedItineraryPackageSchema,
   getDetailedItineraryRequestsSchema,
+  getDetailedItineraryByIdSchema,
 } from "../schema/detailedItinerary.schema";
 import {
   createDetailedItinerary,
   updateDetailedItinerary,
   deleteDetailedItinerary,
+  getDetailedItinerary,
   listDetailedItineraries,
   requestDetailedItinerary,
   listDetailedItineraryRequests,
@@ -39,7 +41,7 @@ const shouldHandleDetailedItineraryUpload = (
 };
 
 router.post(
-  "/api/v1/package",
+  "/api/v1/detailed-itinerary",
   upload.single("pdf"),
   handleMulterError,
   shouldHandleDetailedItineraryUpload,
@@ -84,6 +86,13 @@ router.post(
   "/api/v1/detailed-itinerary/request",
   validate(requestDetailedItinerarySchema),
   requestDetailedItinerary
+);
+
+// Keep dynamic :id route after static paths like /package and /requests
+router.get(
+  "/api/v1/detailed-itinerary/:id",
+  validate(getDetailedItineraryByIdSchema),
+  getDetailedItinerary
 );
 
 export default router;

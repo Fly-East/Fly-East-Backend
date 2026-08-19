@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import cors, { CorsOptions } from "cors";
+import helmet from "helmet";
 import http from "http";
 import { Server } from "./shims/socketIoServer";
 
@@ -77,6 +78,52 @@ import privateTripRoute from "./routes/privateTrip.route";
 
 const app = express();
 const server = http.createServer(app);
+
+// Security headers — apply first so every response is covered
+app.use(
+  helmet({
+    // Clickjacking protection
+    frameguard: { action: "deny" },
+    // Block MIME sniffing
+    noSniff: true,
+    // Remove X-Powered-By
+    hidePoweredBy: true,
+    // Do not leak referrer URLs
+    referrerPolicy: { policy: "no-referrer" },
+    // Restrict Adobe Flash / PDF cross-domain policy
+    permittedCrossDomainPolicies: { permittedPolicies: "none" },
+    // Isolate browsing context (popup-safe)
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    // Allow credentialed cross-origin API/static responses (CORS + frontend)
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    // COEP breaks Socket.IO, Cloudinary, and typical SPA cross-origin loads
+    crossOriginEmbedderPolicy: false,
+    // HSTS only in production (avoid locking browsers onto HTTPS for localhost)
+    hsts: IS_PROD
+      ? {
+          maxAge: 31536000, // 1 year
+          includeSubDomains: true,
+          preload: true,
+        }
+      : false,
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        fontSrc: ["'self'", "https:", "data:"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        imgSrc: ["'self'", "data:", "blob:", "https:"],
+        objectSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        scriptSrcAttr: ["'none'"],
+        styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+        upgradeInsecureRequests: IS_PROD ? [] : null,
+      },
+    },
+  })
+);
 
 app.use(express.json());
 app.use(cookieParser());
