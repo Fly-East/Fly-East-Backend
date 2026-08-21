@@ -59,6 +59,8 @@ export const FRONTEND_BASE_URL =
   read("CLIENT_URL") ||
   "";
 export const ADMIN_FRONTEND_BASE_URL = read("ADMIN_FRONTEND_BASE_URL");
+// Origin of this API server — used to build self-referencing URLs (e.g. webhooks)
+export const SELF_ORIGIN = readString("SELF_ORIGIN", `http://localhost:${readNumber("PORT", 5000)}`);
 
 // Company / notifications
 export const ADMIN_EMAIL = read("ADMIN_EMAIL");
@@ -69,6 +71,34 @@ export const FROM_NAME = readString("FROM_NAME");
 
 // Stripe
 export const STRIPE_SECRET_KEY = read("STRIPE_SECRET_KEY");
+
+// 2C2P PACO payment gateway
+export const PACO_API_KEY = readString("PACO_API_KEY");
+export const PACO_TOKEN = readString("PACO_TOKEN");
+export const PACO_OFFICE_ID = readString("PACO_OFFICE_ID");
+export const PACO_KID = readString("PACO_KID", "7664a2ed0dee4879bdfca0e8ce1ac313");
+export const PACO_MERCHANT_SIGNING_PRIVATE_KEY = readString("PACO_MERCHANT_SIGNING_PRIVATE_KEY");
+export const PACO_MERCHANT_ENCRYPTION_PRIVATE_KEY = readString("PACO_MERCHANT_ENCRYPTION_PRIVATE_KEY");
+export const PACO_PGW_SIGNING_PUBLIC_KEY = readString("PACO_PGW_SIGNING_PUBLIC_KEY");
+export const PACO_PGW_ENCRYPTION_PUBLIC_KEY = readString("PACO_PGW_ENCRYPTION_PUBLIC_KEY");
+export const PREPAYMENT_UI_URL = readString(
+  "PREPAYMENT_UI_URL",
+  "https://core.demo-paco.2c2p.com/api/2.0/Payment/prePaymentUi"
+);
+export const TRANSACTION_STATUS_URL = readString(
+  "TRANSACTION_STATUS_URL",
+  "https://core.demo-paco.2c2p.com/api/2.0/Inquiry/TransactionStatus"
+);
+
+// Payment redirect / webhook URLs
+// Derived from CLIENT_URL (frontend) and SELF_ORIGIN (this API server).
+// Override individually only if your setup differs from the defaults.
+const _clientBase = read("CLIENT_URL") || read("FRONTEND_URL") || "http://localhost:3000";
+const _selfBase = read("SELF_ORIGIN") || `http://localhost:${readNumber("PORT", 5000)}`;
+export const PAYMENT_SUCCESS_URL = read("PAYMENT_SUCCESS_URL") || `${_clientBase}/payment/success`;
+export const PAYMENT_FAILED_URL = read("PAYMENT_FAILED_URL") || `${_clientBase}/payment/failed`;
+export const PAYMENT_CANCELLED_URL = read("PAYMENT_CANCELLED_URL") || `${_clientBase}/payment/cancelled`;
+export const PAYMENT_WEBHOOK_URL = read("PAYMENT_WEBHOOK_URL") || `${_selfBase}/api/v1/payment/webhook/2c2p`;
 
 // Cloudinary (prefer standard names, fall back to legacy)
 export const CLOUDINARY_CLOUD_NAME =
