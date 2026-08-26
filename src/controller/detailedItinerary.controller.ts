@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import axios from "axios";
 import logger from "../utils/logger";
 import { sendEmail } from "../utils/sendMail";
 import { detailedItineraryTemplate } from "../mailtemplate";
@@ -31,8 +30,9 @@ const isPopulatedPackage = (
     Object.prototype.hasOwnProperty.call(value, "_id")
   );
 };
-import { uploadOnCloudinary, deleteImage } from "../utils/cloudinary";
+import { uploadOnCloudinary, deleteImage, downloadCloudinaryAsset } from "../utils/cloudinary";
 import { clearCacheByPrefix } from "../utils/redis";
+import { revalidateFrontendDetailedItineraries } from "../utils/revalidateFrontend";
 
 const buildPayload = (doc: any) => ({
   id: doc._id,
@@ -44,9 +44,8 @@ const buildPayload = (doc: any) => ({
     filename: doc.pdf?.filename,
     mimeType: doc.pdf?.mimeType,
     size: doc.pdf?.size,
-    url: doc.pdf?.url,
-    publicId: doc.pdf?.publicId,
-    resourceType: doc.pdf?.resourceType,
+    // Never expose Cloudinary delivery URLs / publicIds to clients.
+    // Admins preview via authenticated GET /:id/pdf (blob stream).
   },
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,
@@ -106,6 +105,7 @@ export const createDetailedItinerary = async (req: Request, res: Response) => {
       existing.pdf = pdfPayload;
       await existing.save();
       await clearCacheByPrefix("");
+      revalidateFrontendDetailedItineraries();
       return res.status(200).json({
         status: "success",
         message: "Detailed itinerary replaced",
@@ -118,6 +118,7 @@ export const createDetailedItinerary = async (req: Request, res: Response) => {
       pdf: pdfPayload,
     });
     await clearCacheByPrefix("");
+    revalidateFrontendDetailedItineraries();
     return res.status(201).json({
       status: "success",
       message: "Detailed itinerary saved",
@@ -197,6 +198,7 @@ export const updateDetailedItinerary = async (req: Request, res: Response) => {
 
     await detail.save();
     await clearCacheByPrefix("");
+    revalidateFrontendDetailedItineraries();
     return res.status(200).json({
       status: "success",
       message: "Detailed itinerary updated",
@@ -234,6 +236,7 @@ export const deleteDetailedItinerary = async (req: Request, res: Response) => {
       detailedItinerary: deleted._id,
     });
     await clearCacheByPrefix("");
+    revalidateFrontendDetailedItineraries();
     return res.status(200).json({
       status: "success",
       message: "Detailed itinerary deleted",
@@ -279,6 +282,56 @@ export const getDetailedItinerary = async (req: Request, res: Response) => {
     return res.status(500).json({
       status: "error",
       message: error.message || "Failed to fetch detailed itinerary",
+    });
+  }
+};
+
+/**
+ * Streams the PDF for authenticated preview (Cloudinary public URLs often 401).
+ * Clients should open this as a blob — never expose Cloudinary delivery URLs.
+ */
+export const viewDetailedItineraryPdf = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid detailed itinerary ID",
+      });
+    }
+
+    const detail = await DetailedItinerary.findById(id).select("pdf").lean();
+    if (!detail?.pdf?.url || !detail.pdf.publicId) {
+      return res.status(404).json({
+        status: "fail",
+        message: "PDF not found",
+      });
+    }
+
+    const buffer = await downloadCloudinaryAsset({
+      url: detail.pdf.url,
+      publicId: detail.pdf.publicId,
+      resourceType: detail.pdf.resourceType,
+    });
+
+    const filename = detail.pdf.filename || "itinerary.pdf";
+    res.setHeader(
+      "Content-Type",
+      detail.pdf.mimeType || "application/pdf"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${filename.replace(/"/g, "")}"`
+    );
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.status(200).send(buffer);
+  } catch (error: any) {
+    logger.error("View detailed itinerary PDF failed:", error);
+    return res.status(502).json({
+      status: "error",
+      message: error?.message || "Unable to load PDF",
     });
   }
 };
@@ -407,10 +460,11 @@ export const requestDetailedItinerary = async (req: Request, res: Response) => {
     let attachments;
 
     try {
-      const response = await axios.get(detail.pdf.url, {
-        responseType: "arraybuffer",
+      const pdfBuffer = await downloadCloudinaryAsset({
+        url: detail.pdf.url,
+        publicId: detail.pdf.publicId,
+        resourceType: detail.pdf.resourceType,
       });
-      const pdfBuffer = Buffer.from(response.data);
       attachments = [
         {
           filename: detail.pdf.filename,
