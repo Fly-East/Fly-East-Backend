@@ -14,7 +14,7 @@ import {
   PaymentProvider,
   GatewayPaymentStatus,
 } from "../types/payment.types";
-import { PaymentStatus } from "../../../types/booking.type";
+import { PaymentStatus, BookingStatus } from "../../../types/booking.type";
 import {
   PAYMENT_SUCCESS_URL,
   PAYMENT_FAILED_URL,
@@ -69,6 +69,33 @@ function isSuccessfulPayment(status: GatewayPaymentStatus): boolean {
   );
 }
 
+/**
+ * Sync booking paymentStatus (and confirm booking) from a gateway outcome.
+ * Does not reopen cancelled bookings.
+ */
+async function syncBookingFromGateway(
+  bookingId: string,
+  gatewayStatus: GatewayPaymentStatus
+): Promise<void> {
+  const paymentStatus = toBookingPaymentStatus(gatewayStatus);
+  const update: Record<string, unknown> = { paymentStatus };
+
+  if (isSuccessfulPayment(gatewayStatus)) {
+    const booking = await Booking.findById(bookingId).select("status").lean();
+    if (booking && booking.status !== BookingStatus.CANCELLED) {
+      update.status = BookingStatus.CONFIRMED;
+    }
+  }
+
+  await Booking.findByIdAndUpdate(bookingId, { $set: update });
+  logger.info(
+    `[payment] Booking ${bookingId} → paymentStatus=${paymentStatus}` +
+      (update.status ? ` status=${update.status}` : "") +
+      ` (gateway: ${gatewayStatus})`
+  );
+  queueInvoiceIfPaid(bookingId, gatewayStatus);
+}
+
 /** Fire-and-forget invoice email once payment succeeds (idempotent via booking.invoiceSent). */
 function queueInvoiceIfPaid(
   bookingId: string | undefined,
@@ -104,6 +131,63 @@ function amountsMatch(a: number, b: number): boolean {
   return Math.round(a * 100) === Math.round(b * 100);
 }
 
+/** Thrown when initiating payment for a booking that is already settled. */
+export class PaymentConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaymentConflictError";
+  }
+}
+
+/**
+ * Refuse a new payment session if booking or any payment row is already settled.
+ */
+async function assertBookingCanInitiatePayment(booking: {
+  _id: string;
+  paymentStatus?: string;
+  status?: string;
+}): Promise<void> {
+  const bookingId = booking._id.toString();
+
+  if (booking.paymentStatus === PaymentStatus.REFUNDED) {
+    throw new PaymentConflictError("This booking has already been refunded");
+  }
+
+  if (booking.paymentStatus === PaymentStatus.PAID) {
+    throw new PaymentConflictError("This booking has already been paid");
+  }
+
+  if (
+    booking.status === BookingStatus.CONFIRMED ||
+    booking.status === BookingStatus.COMPLETED
+  ) {
+    throw new PaymentConflictError(
+      "This booking is already confirmed and cannot accept a new payment"
+    );
+  }
+
+  if (booking.status === BookingStatus.CANCELLED) {
+    throw new PaymentConflictError("This booking is cancelled");
+  }
+
+  const settled = await Payment.findOne({
+    booking: bookingId,
+    status: {
+      $in: [GatewayPaymentStatus.PAID, GatewayPaymentStatus.AUTHORIZED],
+    },
+  })
+    .select("status")
+    .lean();
+
+  if (settled) {
+    throw new PaymentConflictError(
+      settled.status === GatewayPaymentStatus.AUTHORIZED
+        ? "This booking already has an authorized payment"
+        : "This booking has already been paid"
+    );
+  }
+}
+
 /**
  * Initiates a payment session with the given provider.
  * Creates a Payment document and returns the redirect URL.
@@ -121,9 +205,13 @@ export async function initiatePayment(
     totalAmount: number;
     personalInfo: { fullName: string; email: string }[];
     package?: { name?: string } | string;
+    paymentStatus?: string;
+    status?: string;
   },
   providerKey: string
 ): Promise<string> {
+  await assertBookingCanInitiatePayment(booking);
+
   const svc = getProvider(providerKey);
 
   const amount = booking.finalPricing?.subtotal ?? booking.totalAmount;
@@ -192,14 +280,11 @@ export async function initiatePayment(
           },
         });
 
-        await Booking.findByIdAndUpdate(bookingId, {
-          paymentStatus: toBookingPaymentStatus(latest.gatewayStatus),
-        });
+        await syncBookingFromGateway(bookingId, latest.gatewayStatus);
 
         logger.info(
           `[payment] Not reusing session ${existing.orderNo} for booking ${bookingId}; gateway status is ${latest.gatewayStatus}`
         );
-        queueInvoiceIfPaid(bookingId, latest.gatewayStatus);
       } catch (err) {
         // If the status query fails, fall back to current behavior (reuse),
         // so we don't block users from starting payment.
@@ -332,14 +417,9 @@ export async function handleWebhook(
     );
   }
 
-  // Update the booking's payment status
+  // Update the booking's payment status (+ confirm when paid)
   if (bookingId) {
-    const newStatus = toBookingPaymentStatus(gatewayStatus);
-    await Booking.findByIdAndUpdate(bookingId, { paymentStatus: newStatus });
-    logger.info(
-      `[payment] Booking ${bookingId} paymentStatus → ${newStatus} (gateway: ${gatewayStatus})`
-    );
-    queueInvoiceIfPaid(bookingId, gatewayStatus);
+    await syncBookingFromGateway(bookingId, gatewayStatus);
   }
 }
 
@@ -444,12 +524,10 @@ export async function reconcilePendingPayments(): Promise<void> {
 
         const bookingId = payment.booking?.toString();
         if (bookingId) {
-          const newStatus = toBookingPaymentStatus(gatewayStatus);
-          await Booking.findByIdAndUpdate(bookingId, { paymentStatus: newStatus });
+          await syncBookingFromGateway(bookingId, gatewayStatus);
           logger.info(
-            `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId} → ${newStatus})`
+            `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId})`
           );
-          queueInvoiceIfPaid(bookingId, gatewayStatus);
         } else {
           logger.info(
             `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus}`
@@ -496,4 +574,24 @@ export async function reconcilePendingPayments(): Promise<void> {
       logger.error(`[reconcile] Failed to process orderNo=${payment.orderNo}: ${err}`);
     }
   }
+}
+
+/**
+ * Backfill: paid bookings that were never moved off `pending` lifecycle status.
+ */
+export async function confirmPaidPendingBookings(): Promise<number> {
+  const result = await Booking.updateMany(
+    {
+      paymentStatus: PaymentStatus.PAID,
+      status: BookingStatus.PENDING,
+    },
+    { $set: { status: BookingStatus.CONFIRMED } }
+  );
+  const n = result.modifiedCount ?? 0;
+  if (n > 0) {
+    logger.info(
+      `[payment] Confirmed ${n} paid booking(s) that were still pending`
+    );
+  }
+  return n;
 }

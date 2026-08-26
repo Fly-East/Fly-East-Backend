@@ -1,6 +1,9 @@
 import schedule from "node-schedule";
 import logger from "../../../utils/logger";
-import { reconcilePendingPayments } from "../service/payment.service";
+import {
+  confirmPaidPendingBookings,
+  reconcilePendingPayments,
+} from "../service/payment.service";
 
 /**
  * Runs every 15 minutes to:
@@ -17,6 +20,7 @@ export function startPaymentReconcileCron(): void {
     logger.info("[reconcile] Cron triggered.");
     try {
       await reconcilePendingPayments();
+      await confirmPaidPendingBookings();
     } catch (err) {
       logger.error(`[reconcile] Unexpected error: ${err}`);
     }
@@ -25,9 +29,14 @@ export function startPaymentReconcileCron(): void {
   logger.info(`[reconcile] Cron scheduled (${SCHEDULE}).`);
 
   // Run once on boot so stale pending sessions don't wait for the next tick.
-  void reconcilePendingPayments().catch((err) => {
-    logger.error(`[reconcile] Startup run failed: ${err}`);
-  });
+  void (async () => {
+    try {
+      await reconcilePendingPayments();
+      await confirmPaidPendingBookings();
+    } catch (err) {
+      logger.error(`[reconcile] Startup run failed: ${err}`);
+    }
+  })();
 }
 
 export function stopPaymentReconcileCron(): void {

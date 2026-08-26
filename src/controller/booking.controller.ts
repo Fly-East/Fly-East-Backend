@@ -31,6 +31,8 @@ import {
 } from "../service/bookingPricingSnapshot.service";
 import { FRONTEND_URL, FRONTEND_BASE_URL } from "../configs/env";
 import crypto from "crypto";
+import Payment from "../modules/payment/model/payment.model";
+import { GatewayPaymentStatus } from "../modules/payment/types/payment.types";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -883,6 +885,48 @@ const finalizeQuote = async (req: Request, res: Response) => {
       });
     }
 
+    if (
+      booking.paymentStatus === PaymentStatus.PAID ||
+      booking.paymentStatus === PaymentStatus.REFUNDED ||
+      booking.status === BookingStatus.CONFIRMED ||
+      booking.status === BookingStatus.COMPLETED
+    ) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        status: "fail",
+        message:
+          "Cannot send a new quote for a booking that is already paid or confirmed",
+        data: {
+          paymentStatus: booking.paymentStatus,
+          status: booking.status,
+        },
+      });
+    }
+
+    const settledPayment = await Payment.findOne({
+      booking: booking._id,
+      status: {
+        $in: [GatewayPaymentStatus.PAID, GatewayPaymentStatus.AUTHORIZED],
+      },
+    })
+      .select("status")
+      .session(session)
+      .lean();
+
+    if (settledPayment) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        status: "fail",
+        message:
+          settledPayment.status === GatewayPaymentStatus.AUTHORIZED
+            ? "Cannot send a new quote while payment is authorized"
+            : "Cannot send a new quote for a booking that is already paid",
+        data: { gatewayPaymentStatus: settledPayment.status },
+      });
+    }
+
     const snapshot = buildFinalSnapshotFromRequest(booking, req.body || {});
     const pkg = await Package.findById(booking.package).select("name");
     const packageName = (pkg as any)?.name || "Package";
@@ -1049,9 +1093,20 @@ const getPublicQuote = async (req: Request, res: Response) => {
       packageName
     );
 
+    const latestPayment = await Payment.findOne({ booking: booking._id })
+      .sort({ initiatedAt: -1 })
+      .select("status")
+      .lean();
+
     return res.status(200).json({
       status: "success",
-      data: publicView,
+      data: {
+        ...publicView,
+        paymentStatus: booking.paymentStatus,
+        bookingStatus: booking.status,
+        bookingReference: booking.bookingReference,
+        gatewayPaymentStatus: latestPayment?.status ?? null,
+      },
     });
   } catch (error) {
     logger.error("Error fetching public quote:", error);

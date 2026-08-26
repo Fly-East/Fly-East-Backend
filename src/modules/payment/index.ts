@@ -17,6 +17,8 @@ export {
   getSupportedProviders,
   listPayments,
   reconcilePendingPayments,
+  confirmPaidPendingBookings,
+  PaymentConflictError,
 } from "./service/payment.service";
 export { default as paymentRoutes } from "./routes/payment.routes";
 export {
