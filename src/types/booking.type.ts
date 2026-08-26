@@ -109,4 +109,7 @@ export interface BookingType extends Document {
   quoteTokenExpiresAt?: Date;
   seatsReserved?: boolean;
   seen: boolean;
+  /** True after payment invoice email was queued to the traveller */
+  invoiceSent?: boolean;
+  invoiceSentAt?: Date;
 }

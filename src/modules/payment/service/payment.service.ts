@@ -23,6 +23,7 @@ import {
 } from "../../../configs/env";
 import pacoProvider from "../providers/paco.provider";
 import logger from "../../../utils/logger";
+import { sendBookingInvoice } from "../../invoice";
 
 // ---------------------------------------------------------------------------
 // Provider registry — extend here when adding new gateways
@@ -59,6 +60,27 @@ function toBookingPaymentStatus(
     default:
       return PaymentStatus.PENDING;
   }
+}
+
+function isSuccessfulPayment(status: GatewayPaymentStatus): boolean {
+  return (
+    status === GatewayPaymentStatus.PAID ||
+    status === GatewayPaymentStatus.AUTHORIZED
+  );
+}
+
+/** Fire-and-forget invoice email once payment succeeds (idempotent via booking.invoiceSent). */
+function queueInvoiceIfPaid(
+  bookingId: string | undefined,
+  gatewayStatus: GatewayPaymentStatus
+): void {
+  if (!bookingId || !isSuccessfulPayment(gatewayStatus)) return;
+
+  void sendBookingInvoice(bookingId).catch((err) => {
+    logger.error(
+      `[payment] Failed to send invoice for booking ${bookingId}: ${err}`
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +199,7 @@ export async function initiatePayment(
         logger.info(
           `[payment] Not reusing session ${existing.orderNo} for booking ${bookingId}; gateway status is ${latest.gatewayStatus}`
         );
+        queueInvoiceIfPaid(bookingId, latest.gatewayStatus);
       } catch (err) {
         // If the status query fails, fall back to current behavior (reuse),
         // so we don't block users from starting payment.
@@ -316,6 +339,7 @@ export async function handleWebhook(
     logger.info(
       `[payment] Booking ${bookingId} paymentStatus → ${newStatus} (gateway: ${gatewayStatus})`
     );
+    queueInvoiceIfPaid(bookingId, gatewayStatus);
   }
 }
 
@@ -425,6 +449,7 @@ export async function reconcilePendingPayments(): Promise<void> {
           logger.info(
             `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId} → ${newStatus})`
           );
+          queueInvoiceIfPaid(bookingId, gatewayStatus);
         } else {
           logger.info(
             `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus}`

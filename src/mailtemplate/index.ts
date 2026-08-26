@@ -2,7 +2,7 @@ import {
   bookingConfirmationOwnerTemplate,
   bookingConfirmationTravelerTemplate,
 } from "./bookingConfirmation";
-import { bookingInvoiceTemplate } from "./bookingInvoice";
+import { bookingInvoiceTemplate, bookingInvoiceText } from "./bookingInvoice";
 import { bookingReplyTemplate } from "./bookingReply";
 import { customBookingReplyTemplate } from "./customBookingReply";
 import { detailedItineraryTemplate } from "./detailedItinerary";
@@ -16,6 +16,7 @@ export {
   bookingConfirmationOwnerTemplate,
   bookingConfirmationTravelerTemplate,
   bookingInvoiceTemplate,
+  bookingInvoiceText,
   bookingReplyTemplate,
   customBookingReplyTemplate,
   detailedItineraryTemplate,

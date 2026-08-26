@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import axios from "axios";
 import logger from "../utils/logger";
 import { sendEmail } from "../utils/sendMail";
 import { detailedItineraryTemplate } from "../mailtemplate";
@@ -31,7 +30,11 @@ const isPopulatedPackage = (
     Object.prototype.hasOwnProperty.call(value, "_id")
   );
 };
-import { uploadOnCloudinary, deleteImage } from "../utils/cloudinary";
+import {
+  uploadOnCloudinary,
+  deleteImage,
+  downloadCloudinaryAsset,
+} from "../utils/cloudinary";
 import { clearCacheByPrefix } from "../utils/redis";
 
 const buildPayload = (doc: any) => ({
@@ -407,10 +410,11 @@ export const requestDetailedItinerary = async (req: Request, res: Response) => {
     let attachments;
 
     try {
-      const response = await axios.get(detail.pdf.url, {
-        responseType: "arraybuffer",
+      const pdfBuffer = await downloadCloudinaryAsset({
+        url: detail.pdf.url,
+        publicId: detail.pdf.publicId,
+        resourceType: detail.pdf.resourceType,
       });
-      const pdfBuffer = Buffer.from(response.data);
       attachments = [
         {
           filename: detail.pdf.filename,

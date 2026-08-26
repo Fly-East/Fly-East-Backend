@@ -78,6 +78,7 @@ import basedSeason from "./routes/seasonInfo.routes";
 import captchaRoute from "./routes/captcha.route";
 import privateTripRoute from "./routes/privateTrip.route";
 import { paymentRoutes as paymentRoute, startPaymentReconcileCron } from "./modules/payment";
+import { sendTestInvoiceForPaidBookings } from "./utils/sendTestBookingInvoice";
 
 const app = express();
 const server = http.createServer(app);
@@ -442,6 +443,8 @@ server.listen(PORT, async () => {
     await createAdminIfNotPresent();
     await ensureContactIndexes();
     startPaymentReconcileCron();
+
+    // await sendTestInvoiceForPaidBookings("lamap0000@gmail.com");
   } catch (error) {
     logger.error("❌ Failed to initialize app:", error);
     process.exit(1);

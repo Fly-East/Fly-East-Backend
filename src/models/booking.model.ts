@@ -243,6 +243,13 @@ const BookingSchema = new Schema<BookingType>(
       type: Boolean,
       default: false,
     },
+    invoiceSent: {
+      type: Boolean,
+      default: false,
+    },
+    invoiceSentAt: {
+      type: Date,
+    },
   },
   {
     timestamps: true,

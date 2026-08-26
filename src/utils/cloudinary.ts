@@ -1,4 +1,5 @@
 import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
+import axios from "axios";
 import fs from "fs";
 import { extractPublicId } from "cloudinary-build-url";
 import dotenv from "dotenv";
@@ -100,5 +101,118 @@ export const getPublicId = (imageUrl: string): string | null => {
   }
 };
 
+type DownloadCloudinaryAssetOptions = {
+  url: string;
+  publicId: string;
+  resourceType?: string;
+};
+
+/**
+ * Downloads a Cloudinary asset. Falls back to signed / private download URLs
+ * when the public URL returns 401 (common for restricted PDFs).
+ */
+export async function downloadCloudinaryAsset(
+  options: DownloadCloudinaryAssetOptions
+): Promise<Buffer> {
+  const tryGet = async (downloadUrl: string): Promise<Buffer> => {
+    const response = await axios.get(downloadUrl, {
+      responseType: "arraybuffer",
+      timeout: 30_000,
+    });
+    return Buffer.from(response.data);
+  };
+
+  try {
+    return await tryGet(options.url);
+  } catch (directErr) {
+    logger.warn(
+      `[cloudinary] Direct download failed for ${options.publicId}, trying signed URLs: ${directErr}`
+    );
+  }
+
+  const resourceTypes = Array.from(
+    new Set(
+      [options.resourceType, "raw", "image", "auto"].filter(
+        (v): v is string => Boolean(v)
+      )
+    )
+  );
+
+  const formatGuess =
+    options.url.split(".").pop()?.split(/[?#]/)[0]?.toLowerCase() || "pdf";
+
+  let lastErr: unknown;
+  for (const resource_type of resourceTypes) {
+    try {
+      const signedUrl = cloudinary.url(options.publicId, {
+        resource_type,
+        type: "upload",
+        sign_url: true,
+        secure: true,
+      });
+      return await tryGet(signedUrl);
+    } catch (err) {
+      lastErr = err;
+    }
+
+    try {
+      const signedPdfUrl = cloudinary.url(options.publicId, {
+        resource_type,
+        type: "upload",
+        sign_url: true,
+        secure: true,
+        format: formatGuess,
+      });
+      return await tryGet(signedPdfUrl);
+    } catch (err) {
+      lastErr = err;
+    }
+
+    try {
+      const privateUrl = cloudinary.utils.private_download_url(
+        options.publicId,
+        formatGuess,
+        { resource_type, type: "upload" }
+      );
+      return await tryGet(privateUrl);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  // Last resort: Admin API download endpoint (authenticated with API key/secret)
+  for (const resource_type of resourceTypes) {
+    try {
+      const cloudName = process.env.Cloudinary_Cloud_Name;
+      const apiKey = process.env.Cloudinary_API_Key;
+      const apiSecret = process.env.Cloudinary_API_Secret;
+      if (!cloudName || !apiKey || !apiSecret) break;
+
+      const adminUrl = `https://api.cloudinary.com/v1_1/${cloudName}/resources/${resource_type}/download`;
+      const response = await axios.post(
+        adminUrl,
+        new URLSearchParams({
+          public_ids: options.publicId,
+          resource_type,
+          type: "upload",
+        }).toString(),
+        {
+          auth: { username: apiKey, password: apiSecret },
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          responseType: "arraybuffer",
+          timeout: 30_000,
+          maxRedirects: 5,
+        }
+      );
+      return Buffer.from(response.data);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`Failed to download Cloudinary asset ${options.publicId}`);
+}
 
 export { uploadOnCloudinary };
