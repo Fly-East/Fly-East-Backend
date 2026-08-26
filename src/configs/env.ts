@@ -60,6 +60,9 @@ export const FRONTEND_BASE_URL =
   "";
 export const ADMIN_FRONTEND_BASE_URL = read("ADMIN_FRONTEND_BASE_URL");
 
+/** Shared secret for Next.js on-demand ISR (x-revalidate-secret). */
+export const REVALIDATE_SECRET = read("REVALIDATE_SECRET");
+
 // Company / notifications
 export const ADMIN_EMAIL = read("ADMIN_EMAIL");
 export const SUPPORT_EMAIL = read("SUPPORT_EMAIL");
