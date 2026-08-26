@@ -356,30 +356,36 @@ export async function listPayments(params?: {
   return docs;
 }
 
+/** Local TTL: abandon pending sessions faster than waiting for PACO expiry (~24h). */
+const PENDING_EXPIRE_AFTER_MS = 2 * 60 * 60 * 1000;
+
+/** Non-terminal statuses that may still change on the gateway. */
+const RECONCILE_STATUSES: GatewayPaymentStatus[] = [
+  GatewayPaymentStatus.PENDING,
+  GatewayPaymentStatus.AUTHORIZED,
+];
+
 /**
- * Scans all PENDING payment documents and polls each gateway for the latest
- * status. Called by the reconciliation cron job.
- *
- * Payments older than RECONCILE_STALE_HOURS are skipped — they're either
- * expired by the gateway or should be investigated manually.
+ * Polls gateway for pending + authorized payments (not paid/cancelled/failed/refunded).
+ * Locally expires only pending sessions after PENDING_EXPIRE_AFTER_MS (2 hours).
+ * Authorized is never auto-expired — it may still settle to paid.
  */
 export async function reconcilePendingPayments(): Promise<void> {
-  const STALE_CUTOFF_HOURS = 24;
-  const cutoff = new Date(Date.now() - STALE_CUTOFF_HOURS * 60 * 60 * 1000);
-
-  const pending = await Payment.find({
-    status: GatewayPaymentStatus.PENDING,
-    initiatedAt: { $gte: cutoff },
+  const open = await Payment.find({
+    status: { $in: RECONCILE_STATUSES },
   }).lean();
 
-  if (pending.length === 0) {
-    logger.debug("[reconcile] No pending payments to reconcile.");
+  if (open.length === 0) {
+    logger.debug("[reconcile] No open payments to reconcile.");
     return;
   }
 
-  logger.info(`[reconcile] Checking ${pending.length} pending payment(s)...`);
+  logger.info(
+    `[reconcile] Checking ${open.length} open payment(s) (pending|authorized)...`
+  );
+  const expireBefore = new Date(Date.now() - PENDING_EXPIRE_AFTER_MS);
 
-  for (const payment of pending) {
+  for (const payment of open) {
     try {
       const provider = providers[payment.provider as PaymentProvider];
       if (!provider) {
@@ -387,29 +393,82 @@ export async function reconcilePendingPayments(): Promise<void> {
         continue;
       }
 
-      const result = await provider.queryStatus(payment.orderNo);
+      let gatewayStatus: GatewayPaymentStatus | null = null;
+      let rawPayload: Record<string, unknown> | undefined;
 
-      if (result.gatewayStatus === GatewayPaymentStatus.PENDING) {
-        logger.debug(`[reconcile] ${payment.orderNo} still PENDING — skipping.`);
+      try {
+        const result = await provider.queryStatus(payment.orderNo);
+        gatewayStatus = result.gatewayStatus;
+        rawPayload = result.rawPayload;
+      } catch (err) {
+        logger.warn(
+          `[reconcile] queryStatus failed for orderNo=${payment.orderNo}: ${err}`
+        );
+      }
+
+      if (gatewayStatus && gatewayStatus !== payment.status) {
+        await Payment.findByIdAndUpdate(payment._id, {
+          $set: {
+            status: gatewayStatus,
+            resolvedAt: new Date(),
+            providerMeta: {
+              ...((payment.providerMeta as object) ?? {}),
+              reconciled: rawPayload,
+            },
+          },
+        });
+
+        const bookingId = payment.booking?.toString();
+        if (bookingId) {
+          const newStatus = toBookingPaymentStatus(gatewayStatus);
+          await Booking.findByIdAndUpdate(bookingId, { paymentStatus: newStatus });
+          logger.info(
+            `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId} → ${newStatus})`
+          );
+        } else {
+          logger.info(
+            `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus}`
+          );
+        }
+        continue;
+      }
+
+      // Only auto-expire abandoned pending sessions — never authorized holds.
+      if (payment.status !== GatewayPaymentStatus.PENDING) {
+        logger.debug(
+          `[reconcile] ${payment.orderNo} still ${payment.status} — no change.`
+        );
+        continue;
+      }
+
+      const initiatedAt = payment.initiatedAt
+        ? new Date(payment.initiatedAt)
+        : null;
+      if (!initiatedAt || initiatedAt > expireBefore) {
+        logger.debug(
+          `[reconcile] ${payment.orderNo} still PENDING within 2h window — skipping.`
+        );
         continue;
       }
 
       await Payment.findByIdAndUpdate(payment._id, {
-        status: result.gatewayStatus,
-        resolvedAt: new Date(),
-        providerMeta: { ...((payment.providerMeta as object) ?? {}), reconciled: result.rawPayload },
+        $set: {
+          status: GatewayPaymentStatus.CANCELLED,
+          resolvedAt: new Date(),
+          providerMeta: {
+            ...((payment.providerMeta as object) ?? {}),
+            expiredReason: "local_session_timeout",
+            expiredAt: new Date().toISOString(),
+            ...(rawPayload ? { reconciled: rawPayload } : {}),
+          },
+        },
       });
 
-      const bookingId = payment.booking?.toString();
-      if (bookingId) {
-        const newStatus = toBookingPaymentStatus(result.gatewayStatus);
-        await Booking.findByIdAndUpdate(bookingId, { paymentStatus: newStatus });
-        logger.info(
-          `[reconcile] Booking ${bookingId} → ${newStatus} (orderNo: ${payment.orderNo})`
-        );
-      }
+      logger.info(
+        `[reconcile] Expired pending session ${payment.orderNo} after 2h (local_session_timeout)`
+      );
     } catch (err) {
-      logger.error(`[reconcile] Failed to check orderNo=${payment.orderNo}: ${err}`);
+      logger.error(`[reconcile] Failed to process orderNo=${payment.orderNo}: ${err}`);
     }
   }
 }
