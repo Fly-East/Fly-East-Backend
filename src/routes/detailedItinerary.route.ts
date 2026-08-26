@@ -16,6 +16,7 @@ import {
   updateDetailedItinerary,
   deleteDetailedItinerary,
   getDetailedItinerary,
+  viewDetailedItineraryPdf,
   listDetailedItineraries,
   requestDetailedItinerary,
   listDetailedItineraryRequests,
@@ -88,7 +89,14 @@ router.post(
   requestDetailedItinerary
 );
 
-// Keep dynamic :id route after static paths like /package and /requests
+// Keep dynamic :id routes after static paths like /package and /requests
+router.get(
+  "/api/v1/detailed-itinerary/:id/pdf",
+  isAdmin,
+  validate(getDetailedItineraryByIdSchema),
+  viewDetailedItineraryPdf
+);
+
 router.get(
   "/api/v1/detailed-itinerary/:id",
   validate(getDetailedItineraryByIdSchema),
