@@ -14,7 +14,7 @@ import {
   PaymentProvider,
   GatewayPaymentStatus,
 } from "../types/payment.types";
-import { PaymentStatus } from "../../../types/booking.type";
+import { PaymentStatus, BookingStatus } from "../../../types/booking.type";
 import {
   PAYMENT_SUCCESS_URL,
   PAYMENT_FAILED_URL,
@@ -23,6 +23,7 @@ import {
 } from "../../../configs/env";
 import pacoProvider from "../providers/paco.provider";
 import logger from "../../../utils/logger";
+import { sendBookingInvoice } from "../../invoice";
 
 // ---------------------------------------------------------------------------
 // Provider registry — extend here when adding new gateways
@@ -61,6 +62,54 @@ function toBookingPaymentStatus(
   }
 }
 
+function isSuccessfulPayment(status: GatewayPaymentStatus): boolean {
+  return (
+    status === GatewayPaymentStatus.PAID ||
+    status === GatewayPaymentStatus.AUTHORIZED
+  );
+}
+
+/**
+ * Sync booking paymentStatus (and confirm booking) from a gateway outcome.
+ * Does not reopen cancelled bookings.
+ */
+async function syncBookingFromGateway(
+  bookingId: string,
+  gatewayStatus: GatewayPaymentStatus
+): Promise<void> {
+  const paymentStatus = toBookingPaymentStatus(gatewayStatus);
+  const update: Record<string, unknown> = { paymentStatus };
+
+  if (isSuccessfulPayment(gatewayStatus)) {
+    const booking = await Booking.findById(bookingId).select("status").lean();
+    if (booking && booking.status !== BookingStatus.CANCELLED) {
+      update.status = BookingStatus.CONFIRMED;
+    }
+  }
+
+  await Booking.findByIdAndUpdate(bookingId, { $set: update });
+  logger.info(
+    `[payment] Booking ${bookingId} → paymentStatus=${paymentStatus}` +
+      (update.status ? ` status=${update.status}` : "") +
+      ` (gateway: ${gatewayStatus})`
+  );
+  queueInvoiceIfPaid(bookingId, gatewayStatus);
+}
+
+/** Fire-and-forget invoice email once payment succeeds (idempotent via booking.invoiceSent). */
+function queueInvoiceIfPaid(
+  bookingId: string | undefined,
+  gatewayStatus: GatewayPaymentStatus
+): void {
+  if (!bookingId || !isSuccessfulPayment(gatewayStatus)) return;
+
+  void sendBookingInvoice(bookingId).catch((err) => {
+    logger.error(
+      `[payment] Failed to send invoice for booking ${bookingId}: ${err}`
+    );
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Build a unique order number (max 40 chars for PACO)
 // Format: FE-<last8ofBookingId>-<timestamp>
@@ -82,6 +131,63 @@ function amountsMatch(a: number, b: number): boolean {
   return Math.round(a * 100) === Math.round(b * 100);
 }
 
+/** Thrown when initiating payment for a booking that is already settled. */
+export class PaymentConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaymentConflictError";
+  }
+}
+
+/**
+ * Refuse a new payment session if booking or any payment row is already settled.
+ */
+async function assertBookingCanInitiatePayment(booking: {
+  _id: string;
+  paymentStatus?: string;
+  status?: string;
+}): Promise<void> {
+  const bookingId = booking._id.toString();
+
+  if (booking.paymentStatus === PaymentStatus.REFUNDED) {
+    throw new PaymentConflictError("This booking has already been refunded");
+  }
+
+  if (booking.paymentStatus === PaymentStatus.PAID) {
+    throw new PaymentConflictError("This booking has already been paid");
+  }
+
+  if (
+    booking.status === BookingStatus.CONFIRMED ||
+    booking.status === BookingStatus.COMPLETED
+  ) {
+    throw new PaymentConflictError(
+      "This booking is already confirmed and cannot accept a new payment"
+    );
+  }
+
+  if (booking.status === BookingStatus.CANCELLED) {
+    throw new PaymentConflictError("This booking is cancelled");
+  }
+
+  const settled = await Payment.findOne({
+    booking: bookingId,
+    status: {
+      $in: [GatewayPaymentStatus.PAID, GatewayPaymentStatus.AUTHORIZED],
+    },
+  })
+    .select("status")
+    .lean();
+
+  if (settled) {
+    throw new PaymentConflictError(
+      settled.status === GatewayPaymentStatus.AUTHORIZED
+        ? "This booking already has an authorized payment"
+        : "This booking has already been paid"
+    );
+  }
+}
+
 /**
  * Initiates a payment session with the given provider.
  * Creates a Payment document and returns the redirect URL.
@@ -99,9 +205,13 @@ export async function initiatePayment(
     totalAmount: number;
     personalInfo: { fullName: string; email: string }[];
     package?: { name?: string } | string;
+    paymentStatus?: string;
+    status?: string;
   },
   providerKey: string
 ): Promise<string> {
+  await assertBookingCanInitiatePayment(booking);
+
   const svc = getProvider(providerKey);
 
   const amount = booking.finalPricing?.subtotal ?? booking.totalAmount;
@@ -170,9 +280,7 @@ export async function initiatePayment(
           },
         });
 
-        await Booking.findByIdAndUpdate(bookingId, {
-          paymentStatus: toBookingPaymentStatus(latest.gatewayStatus),
-        });
+        await syncBookingFromGateway(bookingId, latest.gatewayStatus);
 
         logger.info(
           `[payment] Not reusing session ${existing.orderNo} for booking ${bookingId}; gateway status is ${latest.gatewayStatus}`
@@ -309,13 +417,9 @@ export async function handleWebhook(
     );
   }
 
-  // Update the booking's payment status
+  // Update the booking's payment status (+ confirm when paid)
   if (bookingId) {
-    const newStatus = toBookingPaymentStatus(gatewayStatus);
-    await Booking.findByIdAndUpdate(bookingId, { paymentStatus: newStatus });
-    logger.info(
-      `[payment] Booking ${bookingId} paymentStatus → ${newStatus} (gateway: ${gatewayStatus})`
-    );
+    await syncBookingFromGateway(bookingId, gatewayStatus);
   }
 }
 
@@ -356,30 +460,36 @@ export async function listPayments(params?: {
   return docs;
 }
 
+/** Local TTL: abandon pending sessions faster than waiting for PACO expiry (~24h). */
+const PENDING_EXPIRE_AFTER_MS = 2 * 60 * 60 * 1000;
+
+/** Non-terminal statuses that may still change on the gateway. */
+const RECONCILE_STATUSES: GatewayPaymentStatus[] = [
+  GatewayPaymentStatus.PENDING,
+  GatewayPaymentStatus.AUTHORIZED,
+];
+
 /**
- * Scans all PENDING payment documents and polls each gateway for the latest
- * status. Called by the reconciliation cron job.
- *
- * Payments older than RECONCILE_STALE_HOURS are skipped — they're either
- * expired by the gateway or should be investigated manually.
+ * Polls gateway for pending + authorized payments (not paid/cancelled/failed/refunded).
+ * Locally expires only pending sessions after PENDING_EXPIRE_AFTER_MS (2 hours).
+ * Authorized is never auto-expired — it may still settle to paid.
  */
 export async function reconcilePendingPayments(): Promise<void> {
-  const STALE_CUTOFF_HOURS = 24;
-  const cutoff = new Date(Date.now() - STALE_CUTOFF_HOURS * 60 * 60 * 1000);
-
-  const pending = await Payment.find({
-    status: GatewayPaymentStatus.PENDING,
-    initiatedAt: { $gte: cutoff },
+  const open = await Payment.find({
+    status: { $in: RECONCILE_STATUSES },
   }).lean();
 
-  if (pending.length === 0) {
-    logger.debug("[reconcile] No pending payments to reconcile.");
+  if (open.length === 0) {
+    logger.debug("[reconcile] No open payments to reconcile.");
     return;
   }
 
-  logger.info(`[reconcile] Checking ${pending.length} pending payment(s)...`);
+  logger.info(
+    `[reconcile] Checking ${open.length} open payment(s) (pending|authorized)...`
+  );
+  const expireBefore = new Date(Date.now() - PENDING_EXPIRE_AFTER_MS);
 
-  for (const payment of pending) {
+  for (const payment of open) {
     try {
       const provider = providers[payment.provider as PaymentProvider];
       if (!provider) {
@@ -387,29 +497,101 @@ export async function reconcilePendingPayments(): Promise<void> {
         continue;
       }
 
-      const result = await provider.queryStatus(payment.orderNo);
+      let gatewayStatus: GatewayPaymentStatus | null = null;
+      let rawPayload: Record<string, unknown> | undefined;
 
-      if (result.gatewayStatus === GatewayPaymentStatus.PENDING) {
-        logger.debug(`[reconcile] ${payment.orderNo} still PENDING — skipping.`);
+      try {
+        const result = await provider.queryStatus(payment.orderNo);
+        gatewayStatus = result.gatewayStatus;
+        rawPayload = result.rawPayload;
+      } catch (err) {
+        logger.warn(
+          `[reconcile] queryStatus failed for orderNo=${payment.orderNo}: ${err}`
+        );
+      }
+
+      if (gatewayStatus && gatewayStatus !== payment.status) {
+        await Payment.findByIdAndUpdate(payment._id, {
+          $set: {
+            status: gatewayStatus,
+            resolvedAt: new Date(),
+            providerMeta: {
+              ...((payment.providerMeta as object) ?? {}),
+              reconciled: rawPayload,
+            },
+          },
+        });
+
+        const bookingId = payment.booking?.toString();
+        if (bookingId) {
+          await syncBookingFromGateway(bookingId, gatewayStatus);
+          logger.info(
+            `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId})`
+          );
+        } else {
+          logger.info(
+            `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus}`
+          );
+        }
+        continue;
+      }
+
+      // Only auto-expire abandoned pending sessions — never authorized holds.
+      if (payment.status !== GatewayPaymentStatus.PENDING) {
+        logger.debug(
+          `[reconcile] ${payment.orderNo} still ${payment.status} — no change.`
+        );
+        continue;
+      }
+
+      const initiatedAt = payment.initiatedAt
+        ? new Date(payment.initiatedAt)
+        : null;
+      if (!initiatedAt || initiatedAt > expireBefore) {
+        logger.debug(
+          `[reconcile] ${payment.orderNo} still PENDING within 2h window — skipping.`
+        );
         continue;
       }
 
       await Payment.findByIdAndUpdate(payment._id, {
-        status: result.gatewayStatus,
-        resolvedAt: new Date(),
-        providerMeta: { ...((payment.providerMeta as object) ?? {}), reconciled: result.rawPayload },
+        $set: {
+          status: GatewayPaymentStatus.CANCELLED,
+          resolvedAt: new Date(),
+          providerMeta: {
+            ...((payment.providerMeta as object) ?? {}),
+            expiredReason: "local_session_timeout",
+            expiredAt: new Date().toISOString(),
+            ...(rawPayload ? { reconciled: rawPayload } : {}),
+          },
+        },
       });
 
-      const bookingId = payment.booking?.toString();
-      if (bookingId) {
-        const newStatus = toBookingPaymentStatus(result.gatewayStatus);
-        await Booking.findByIdAndUpdate(bookingId, { paymentStatus: newStatus });
-        logger.info(
-          `[reconcile] Booking ${bookingId} → ${newStatus} (orderNo: ${payment.orderNo})`
-        );
-      }
+      logger.info(
+        `[reconcile] Expired pending session ${payment.orderNo} after 2h (local_session_timeout)`
+      );
     } catch (err) {
-      logger.error(`[reconcile] Failed to check orderNo=${payment.orderNo}: ${err}`);
+      logger.error(`[reconcile] Failed to process orderNo=${payment.orderNo}: ${err}`);
     }
   }
+}
+
+/**
+ * Backfill: paid bookings that were never moved off `pending` lifecycle status.
+ */
+export async function confirmPaidPendingBookings(): Promise<number> {
+  const result = await Booking.updateMany(
+    {
+      paymentStatus: PaymentStatus.PAID,
+      status: BookingStatus.PENDING,
+    },
+    { $set: { status: BookingStatus.CONFIRMED } }
+  );
+  const n = result.modifiedCount ?? 0;
+  if (n > 0) {
+    logger.info(
+      `[payment] Confirmed ${n} paid booking(s) that were still pending`
+    );
+  }
+  return n;
 }

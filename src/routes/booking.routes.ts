@@ -5,6 +5,7 @@ const {
   previewBooking,
   quoteBookingAdmin,
   createBooking,
+  createAdminQuote,
   checkoutBooking,
   previewFinalQuote,
   finalizeQuote,
@@ -21,6 +22,7 @@ import {
   bookingPreviewSchema,
   bookingQuoteSchema,
   bookingLeadSchema,
+  bookingAdminQuoteSchema,
   bookingCheckoutSchema,
   bookingFinalQuoteSchema,
   publicQuoteTokenSchema,
@@ -42,6 +44,14 @@ router.post(
 );
 
 router.post("/api/v1/booking", validate(bookingLeadSchema), createBooking);
+
+router.post(
+  "/api/v1/booking/admin-quote",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(bookingAdminQuoteSchema),
+  createAdminQuote
+);
 
 router.post(
   "/api/v1/booking/:id/checkout",

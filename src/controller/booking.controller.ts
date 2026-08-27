@@ -31,6 +31,8 @@ import {
 } from "../service/bookingPricingSnapshot.service";
 import { FRONTEND_URL, FRONTEND_BASE_URL } from "../configs/env";
 import crypto from "crypto";
+import Payment from "../modules/payment/model/payment.model";
+import { GatewayPaymentStatus } from "../modules/payment/types/payment.types";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -354,6 +356,212 @@ const createBooking = async (req: Request, res: Response) => {
   }
 };
 
+function normalizeBillingAddress(raw: unknown): {
+  company?: string;
+  street: string;
+  city: string;
+  state?: string;
+  postalCode: string;
+  country: string;
+} {
+  const info = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  const company = String(info.company || "").trim();
+  const state = String(info.state || "").trim();
+  return {
+    ...(company ? { company } : {}),
+    street: String(info.street || "").trim(),
+    city: String(info.city || "").trim(),
+    ...(state ? { state } : {}),
+    postalCode: String(info.postalCode || "").trim(),
+    country: String(info.country || "").trim(),
+  };
+}
+
+/**
+ * Admin-created quote booking (no prior customer request). Does not reserve seats.
+ */
+const createAdminQuote = async (req: Request, res: Response) => {
+  try {
+    const {
+      fixedDateId,
+      personalInfo,
+      billingAddress,
+      arrivalDate,
+      departureDate,
+      totalPeople,
+      package: packageId,
+      message,
+      paymentOption,
+      addons,
+      dateMode,
+      basePricePerPerson,
+    } = req.body;
+
+    const mode =
+      dateMode === "custom" || (!fixedDateId && arrivalDate && departureDate)
+        ? "custom"
+        : "fixed";
+
+    if (arrivalDate && departureDate) {
+      const arrival = new Date(arrivalDate);
+      const departure = new Date(departureDate);
+      if (arrival.getTime() === departure.getTime()) {
+        return res.status(400).json({
+          status: "fail",
+          message: "Arrival and departure dates cannot be the same.",
+        });
+      }
+      if (departure.getTime() <= arrival.getTime()) {
+        return res.status(400).json({
+          status: "fail",
+          message: "Departure date must be after arrival date.",
+        });
+      }
+    }
+
+    const personalInfos = normalizePersonalInfo(personalInfo);
+    const addonSelections = normalizeAddonSelections(addons);
+    const normalizedBilling = normalizeBillingAddress(billingAddress);
+
+    if (
+      !normalizedBilling.street ||
+      !normalizedBilling.city ||
+      !normalizedBilling.postalCode ||
+      !normalizedBilling.country
+    ) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Billing address is incomplete",
+      });
+    }
+
+    let quote: BookingQuoteResult;
+
+    if (mode === "fixed") {
+      if (!fixedDateId) {
+        return res.status(400).json({
+          status: "fail",
+          message: "fixedDateId is required for fixed date mode",
+        });
+      }
+
+      const fixedDate = await FixedDate.findById(fixedDateId);
+      if (!fixedDate) {
+        return res.status(404).json({
+          status: "fail",
+          message: "No fixed date found for the selected date",
+        });
+      }
+
+      if (!fixedDate.hasAvailableSeats(totalPeople)) {
+        return res.status(400).json({
+          status: "fail",
+          message: "Not enough available seats for this date",
+          availableSeats: fixedDate.availableSeats,
+          requiredSeats: totalPeople,
+        });
+      }
+
+      try {
+        quote = await quoteBooking({
+          packageId,
+          fixedDateId,
+          totalPeople,
+          paymentOption,
+          addons: addonSelections,
+        });
+      } catch (error) {
+        if (error instanceof BookingQuoteError) {
+          return res.status(error.statusCode).json({
+            status: "fail",
+            message: error.message,
+            ...(error.details ? { details: error.details } : {}),
+          });
+        }
+        throw error;
+      }
+    } else {
+      if (!arrivalDate || !departureDate) {
+        return res.status(400).json({
+          status: "fail",
+          message: "Custom start and end dates are required",
+        });
+      }
+
+      try {
+        quote = await quoteBooking({
+          packageId,
+          customStartDate: arrivalDate,
+          customEndDate: departureDate,
+          basePricePerPerson: Number(basePricePerPerson) || 0,
+          totalPeople,
+          paymentOption,
+          addons: addonSelections,
+        });
+      } catch (error) {
+        if (error instanceof BookingQuoteError) {
+          return res.status(error.statusCode).json({
+            status: "fail",
+            message: error.message,
+            ...(error.details ? { details: error.details } : {}),
+          });
+        }
+        throw error;
+      }
+    }
+
+    const snapshot = buildBookingPricingSnapshot(quote);
+
+    const booking = await Booking.create({
+      bookingReference: generateBookingReference(),
+      stage: BookingStage.ADMIN_QUOTE,
+      status: BookingStatus.PENDING,
+      paymentStatus: PaymentStatus.PENDING,
+      seen: false,
+      quoteStatus: QuoteStatus.ESTIMATED,
+      seatsReserved: false,
+      package: packageId,
+      ...(mode === "fixed" && fixedDateId ? { fixedDate: fixedDateId } : {}),
+      totalPeople,
+      personalInfo: personalInfos,
+      billingAddress: normalizedBilling,
+      message,
+      selectedAddons: snapshot.selectedAddons,
+      pricing: snapshot.pricing,
+      addons: snapshot.addonIds,
+      totalAmount: snapshot.totalAmount,
+      currency: snapshot.currency,
+      ...(arrivalDate ? { arrivalDate: new Date(arrivalDate) } : {}),
+      ...(departureDate ? { departureDate: new Date(departureDate) } : {}),
+    });
+
+    await clearCacheByPrefix("bookings:");
+    await clearCacheByPrefix("");
+
+    return res.status(201).json({
+      status: "success",
+      message: "Admin quote booking created",
+      data: {
+        booking,
+        publicView: quote.publicView,
+      },
+    });
+  } catch (error) {
+    logger.error(
+      { message: "Error creating admin quote booking", error },
+      "Admin quote booking error"
+    );
+    return res.status(500).json({
+      status: "error",
+      message: "Internal server error during admin quote creation",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
 function estimatePublicView(booking: BookingType, packageName: string) {
   const snapshot = snapshotFromBookingEstimate(booking);
   if (!snapshot) return null;
@@ -513,17 +721,32 @@ export const getAllBookings = async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 100;
     const skip = (page - 1) * limit;
-    const stageParam = String(req.query.stage || "booked").toLowerCase();
-    const stageFilter =
-      stageParam === BookingStage.LEAD
-        ? { stage: BookingStage.LEAD }
-        : {
-            $or: [
-              { stage: BookingStage.BOOKED },
-              { stage: { $exists: false } },
-              { stage: null },
-            ],
-          };
+    const stageParam = String(req.query.stage || "all").toLowerCase();
+
+    let stageFilter: Record<string, unknown>;
+    if (stageParam === BookingStage.LEAD) {
+      stageFilter = { stage: BookingStage.LEAD };
+    } else if (stageParam === BookingStage.BOOKED) {
+      stageFilter = {
+        $or: [
+          { stage: BookingStage.BOOKED },
+          { stage: { $exists: false } },
+          { stage: null },
+        ],
+      };
+    } else if (stageParam === BookingStage.ADMIN_QUOTE) {
+      stageFilter = { stage: BookingStage.ADMIN_QUOTE };
+    } else {
+      // "all" (default for Bookings page): booked + admin_quote (+ legacy)
+      stageFilter = {
+        $or: [
+          { stage: BookingStage.BOOKED },
+          { stage: BookingStage.ADMIN_QUOTE },
+          { stage: { $exists: false } },
+          { stage: null },
+        ],
+      };
+    }
 
     const cacheKey = `bookings:stage:${stageParam}:page:${page}:limit:${limit}`;
 
@@ -785,13 +1008,38 @@ const buildFinalSnapshotFromRequest = (
   booking: BookingType,
   body: any
 ): BookingPricingSnapshotPayload => {
-  const tripDays =
+  const totalPeople = Math.max(
+    1,
+    Math.floor(
+      Number(body.totalPeople) ||
+        booking.totalPeople ||
+        booking.pricing?.totalPeople ||
+        1
+    )
+  );
+
+  let tripDays =
+    Number(body.tripDays) ||
     booking.pricing?.tripDays ||
     booking.finalPricing?.tripDays ||
     1;
+
+  if (body.arrivalDate && body.departureDate) {
+    const start = new Date(body.arrivalDate);
+    const end = new Date(body.departureDate);
+    if (
+      !Number.isNaN(start.getTime()) &&
+      !Number.isNaN(end.getTime()) &&
+      end.getTime() > start.getTime()
+    ) {
+      const ms = end.getTime() - start.getTime();
+      tripDays = Math.max(1, Math.round(ms / (1000 * 60 * 60 * 24)) + 1);
+    }
+  }
+
   return recalculateFromDraft({
-    totalPeople: booking.totalPeople,
-    tripDays,
+    totalPeople,
+    tripDays: Math.max(1, Math.floor(Number(tripDays) || 1)),
     paymentOption: body.paymentOption || booking.pricing?.paymentOption || "full",
     basePricePerPerson: Number(body.basePricePerPerson),
     discountPercent: Number(body.discountPercent),
@@ -883,12 +1131,66 @@ const finalizeQuote = async (req: Request, res: Response) => {
       });
     }
 
+    if (
+      booking.paymentStatus === PaymentStatus.PAID ||
+      booking.paymentStatus === PaymentStatus.REFUNDED ||
+      booking.status === BookingStatus.CONFIRMED ||
+      booking.status === BookingStatus.COMPLETED
+    ) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        status: "fail",
+        message:
+          "Cannot send a new quote for a booking that is already paid or confirmed",
+        data: {
+          paymentStatus: booking.paymentStatus,
+          status: booking.status,
+        },
+      });
+    }
+
+    const settledPayment = await Payment.findOne({
+      booking: booking._id,
+      status: {
+        $in: [GatewayPaymentStatus.PAID, GatewayPaymentStatus.AUTHORIZED],
+      },
+    })
+      .select("status")
+      .session(session)
+      .lean();
+
+    if (settledPayment) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        status: "fail",
+        message:
+          settledPayment.status === GatewayPaymentStatus.AUTHORIZED
+            ? "Cannot send a new quote while payment is authorized"
+            : "Cannot send a new quote for a booking that is already paid",
+        data: { gatewayPaymentStatus: settledPayment.status },
+      });
+    }
+
     const snapshot = buildFinalSnapshotFromRequest(booking, req.body || {});
     const pkg = await Package.findById(booking.package).select("name");
     const packageName = (pkg as any)?.name || "Package";
     const publicView = toPublicView(snapshot, packageName);
 
-    if (!booking.seatsReserved) {
+    // Persist per-booking people / custom dates on this quote only
+    booking.totalPeople = snapshot.pricing.totalPeople;
+    if (req.body?.arrivalDate) {
+      booking.arrivalDate = new Date(req.body.arrivalDate);
+    }
+    if (req.body?.departureDate) {
+      booking.departureDate = new Date(req.body.departureDate);
+    }
+    if (req.body?.useCustomDates === true) {
+      booking.fixedDate = undefined;
+    }
+
+    if (!booking.seatsReserved && booking.fixedDate) {
       fixedDateDoc = await FixedDate.findById(booking.fixedDate).session(session);
       if (!fixedDateDoc) {
         await session.abortTransaction();
@@ -1049,9 +1351,20 @@ const getPublicQuote = async (req: Request, res: Response) => {
       packageName
     );
 
+    const latestPayment = await Payment.findOne({ booking: booking._id })
+      .sort({ initiatedAt: -1 })
+      .select("status")
+      .lean();
+
     return res.status(200).json({
       status: "success",
-      data: publicView,
+      data: {
+        ...publicView,
+        paymentStatus: booking.paymentStatus,
+        bookingStatus: booking.status,
+        bookingReference: booking.bookingReference,
+        gatewayPaymentStatus: latestPayment?.status ?? null,
+      },
     });
   } catch (error) {
     logger.error("Error fetching public quote:", error);
@@ -1066,6 +1379,7 @@ const bookingController = {
   previewBooking,
   quoteBookingAdmin,
   createBooking,
+  createAdminQuote,
   checkoutBooking,
   previewFinalQuote,
   finalizeQuote,

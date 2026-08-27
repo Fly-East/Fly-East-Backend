@@ -20,8 +20,18 @@ export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 export const BookingStage = {
   LEAD: "lead",
   BOOKED: "booked",
+  ADMIN_QUOTE: "admin_quote",
 } as const;
 export type BookingStage = (typeof BookingStage)[keyof typeof BookingStage];
+
+export type BookingBillingAddress = {
+  company?: string;
+  street: string;
+  city: string;
+  state?: string;
+  postalCode: string;
+  country: string;
+};
 
 export const QuoteStatus = {
   ESTIMATED: "estimated",
@@ -80,13 +90,14 @@ export interface BookingType extends Document {
   currency: string;
   totalPeople: number;
   package: Types.ObjectId;
-  fixedDate: Types.ObjectId;
+  fixedDate?: Types.ObjectId;
   personalInfo: {
     fullName: string;
     email: string;
     country: string;
     phoneNumber: string;
   }[];
+  billingAddress?: BookingBillingAddress;
   arrivalDate?: Date;
   departureDate?: Date;
   message?: string;
@@ -109,4 +120,7 @@ export interface BookingType extends Document {
   quoteTokenExpiresAt?: Date;
   seatsReserved?: boolean;
   seen: boolean;
+  /** True after payment invoice email was queued to the traveller */
+  invoiceSent?: boolean;
+  invoiceSentAt?: Date;
 }

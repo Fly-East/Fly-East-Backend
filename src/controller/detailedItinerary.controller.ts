@@ -30,7 +30,11 @@ const isPopulatedPackage = (
     Object.prototype.hasOwnProperty.call(value, "_id")
   );
 };
-import { uploadOnCloudinary, deleteImage, downloadCloudinaryAsset } from "../utils/cloudinary";
+import {
+  uploadOnCloudinary,
+  deleteImage,
+  downloadCloudinaryAsset,
+} from "../utils/cloudinary";
 import { clearCacheByPrefix } from "../utils/redis";
 import { revalidateFrontendDetailedItineraries } from "../utils/revalidateFrontend";
 

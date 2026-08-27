@@ -74,6 +74,13 @@ export async function initiatePaymentHandler(
       data: { paymentPageURL },
     });
   } catch (err) {
+    if (err instanceof paymentService.PaymentConflictError) {
+      res.status(409).json({
+        status: "fail",
+        message: err.message,
+      });
+      return;
+    }
     logger.error("[payment] initiatePayment error:", err);
     next(err);
   }
