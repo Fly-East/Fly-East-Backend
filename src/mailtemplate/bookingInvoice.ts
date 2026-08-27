@@ -7,10 +7,20 @@ interface ContactInfo {
   country?: string;
 }
 
+interface BillingAddressInfo {
+  company?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+}
+
 export interface BookingInvoiceData {
   bookingReference: string;
   invoiceNumber?: string;
   primaryContact?: ContactInfo;
+  billingAddress?: BillingAddressInfo;
   invoiceDate?: string;
   dueDate?: string;
   startDate?: string;

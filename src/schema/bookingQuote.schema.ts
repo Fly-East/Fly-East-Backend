@@ -66,10 +66,71 @@ export const bookingCheckoutSchema = z.object({
   }),
 });
 
+const billingAddressSchema = z.object({
+  company: z.string().trim().optional(),
+  street: z.string().min(1, "Street is required"),
+  city: z.string().min(1, "City is required"),
+  state: z.string().trim().optional(),
+  postalCode: z.string().min(1, "Postal code is required"),
+  country: z.string().min(1, "Country is required"),
+});
+
+export const bookingAdminQuoteSchema = z.object({
+  body: z
+    .object({
+      package: z.string({ required_error: "Package is required" }),
+      totalPeople: z
+        .number({ required_error: "totalPeople is required" })
+        .int()
+        .min(1),
+      paymentOption: z.enum(["full", "partial"]).optional().default("full"),
+      addons: z.array(addonSelection).optional().default([]),
+      personalInfo: z.union([
+        personalInfoSchema,
+        z.array(personalInfoSchema).min(1),
+      ]),
+      billingAddress: billingAddressSchema,
+      message: z.string().optional(),
+      dateMode: z.enum(["fixed", "custom"]).optional().default("fixed"),
+      fixedDateId: z.string().optional().nullable(),
+      arrivalDate: z.string().optional().nullable(),
+      departureDate: z.string().optional().nullable(),
+      basePricePerPerson: z.number().min(0).optional(),
+    })
+    .superRefine((body, ctx) => {
+      const mode = body.dateMode || (body.fixedDateId ? "fixed" : "custom");
+      if (mode === "fixed") {
+        if (!body.fixedDateId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["fixedDateId"],
+            message: "fixedDateId is required for fixed date mode",
+          });
+        }
+      } else {
+        if (!body.arrivalDate) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["arrivalDate"],
+            message: "Start date is required for custom date mode",
+          });
+        }
+        if (!body.departureDate) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["departureDate"],
+            message: "End date is required for custom date mode",
+          });
+        }
+      }
+    }),
+});
+
 export type BookingPreviewInput = z.infer<typeof bookingPreviewSchema>;
 export type BookingQuoteSchemaInput = z.infer<typeof bookingQuoteSchema>;
 export type BookingLeadInput = z.infer<typeof bookingLeadSchema>;
 export type BookingCheckoutInput = z.infer<typeof bookingCheckoutSchema>;
+export type BookingAdminQuoteInput = z.infer<typeof bookingAdminQuoteSchema>;
 
 const finalQuoteAddonDraft = z.object({
   id: z.string().optional(),
@@ -88,6 +149,12 @@ export const bookingFinalQuoteSchema = z.object({
     basePricePerPerson: z.number().min(0),
     discountPercent: z.number().min(0).max(100),
     paymentOption: z.enum(["full", "partial"]).optional().default("full"),
+    totalPeople: z.number().int().min(1).optional(),
+    tripDays: z.number().int().min(1).optional(),
+    arrivalDate: z.string().optional().nullable(),
+    departureDate: z.string().optional().nullable(),
+    /** When true, drop fixedDate so no seats are reserved */
+    useCustomDates: z.boolean().optional(),
     addons: z.array(finalQuoteAddonDraft).optional().default([]),
   }),
   params: z.object({

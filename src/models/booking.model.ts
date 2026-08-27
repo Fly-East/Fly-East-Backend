@@ -190,7 +190,7 @@ const BookingSchema = new Schema<BookingType>(
     fixedDate: {
       type: Schema.Types.ObjectId,
       ref: "FixedDate",
-      required: true,
+      required: false,
     },
     personalInfo: [
       {
@@ -218,6 +218,17 @@ const BookingSchema = new Schema<BookingType>(
         },
       },
     ],
+    billingAddress: {
+      type: {
+        company: { type: String, trim: true },
+        street: { type: String, required: true, trim: true },
+        city: { type: String, required: true, trim: true },
+        state: { type: String, trim: true },
+        postalCode: { type: String, required: true, trim: true },
+        country: { type: String, required: true, trim: true },
+      },
+      required: false,
+    },
     arrivalDate: {
       type: Date,
       required: false,

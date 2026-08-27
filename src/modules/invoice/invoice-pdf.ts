@@ -119,16 +119,40 @@ export async function generateBookingInvoicePdf(
       doc.text(data.primaryContact.fullName, leftX, y);
       y += 14;
     }
+    if (data.billingAddress?.company) {
+      doc.text(data.billingAddress.company, leftX, y);
+      y += 14;
+    }
+    if (data.billingAddress?.street) {
+      doc.text(data.billingAddress.street, leftX, y);
+      y += 14;
+    }
+    if (data.billingAddress) {
+      const cityLine = [
+        data.billingAddress.city,
+        data.billingAddress.state,
+        data.billingAddress.postalCode,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      if (cityLine) {
+        doc.text(cityLine, leftX, y);
+        y += 14;
+      }
+      if (data.billingAddress.country) {
+        doc.text(data.billingAddress.country, leftX, y);
+        y += 14;
+      }
+    } else if (data.primaryContact?.country) {
+      doc.text(data.primaryContact.country, leftX, y);
+      y += 14;
+    }
     if (data.primaryContact?.email) {
       doc.text(data.primaryContact.email, leftX, y);
       y += 14;
     }
     if (data.primaryContact?.phoneNumber) {
       doc.text(data.primaryContact.phoneNumber, leftX, y);
-      y += 14;
-    }
-    if (data.primaryContact?.country) {
-      doc.text(data.primaryContact.country, leftX, y);
       y += 14;
     }
 

@@ -14,6 +14,7 @@ router.get("/api/v1/notifi/unseen-counts", async (req, res) => {
         seen: false,
         $or: [
           { stage: BookingStage.BOOKED },
+          { stage: BookingStage.ADMIN_QUOTE },
           { stage: { $exists: false } },
           { stage: null },
         ],

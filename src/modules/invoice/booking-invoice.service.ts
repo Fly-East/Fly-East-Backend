@@ -65,6 +65,14 @@ export function buildBookingInvoiceData(booking: {
     phoneNumber?: string;
     country?: string;
   }>;
+  billingAddress?: {
+    company?: string;
+    street?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+  } | null;
   finalPricing?: {
     tripDays?: number;
     totalPeople?: number;
@@ -87,6 +95,7 @@ export function buildBookingInvoiceData(booking: {
 }): BookingInvoiceData {
   const pricing = booking.finalPricing ?? booking.pricing;
   const primary = booking.personalInfo?.[0];
+  const billing = booking.billingAddress;
   const packageName =
     booking.package && typeof booking.package === "object"
       ? booking.package.name
@@ -121,6 +130,16 @@ export function buildBookingInvoiceData(booking: {
           email: primary.email,
           phoneNumber: primary.phoneNumber,
           country: primary.country,
+        }
+      : undefined,
+    billingAddress: billing?.street
+      ? {
+          company: billing.company,
+          street: billing.street,
+          city: billing.city,
+          state: billing.state,
+          postalCode: billing.postalCode,
+          country: billing.country,
         }
       : undefined,
     invoiceDate: today,
