@@ -1,8 +1,6 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
+    image: fly-east-test:latest
     container_name: fly-east-dev-server
 
     restart: unless-stopped
