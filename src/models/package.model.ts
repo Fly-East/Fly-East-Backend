@@ -152,21 +152,6 @@ const PackageSchema = new Schema<PackageType>(
         ref: "Insurance",
       },
     ],
-    addons: {
-      type: [Schema.Types.ObjectId],
-      ref: "Addons",
-      required: false,
-      validate: {
-        validator: function (v: any) {
-          return (
-            Array.isArray(v) &&
-            v.every((id) => mongoose.Types.ObjectId.isValid(id))
-          );
-        },
-        message: "Invalid Addons ObjectId array",
-      },
-      default: [],
-    },
     videos: [
       {
         type: Schema.Types.ObjectId,

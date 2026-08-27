@@ -5,8 +5,10 @@ import helmet from "helmet";
 import http from "http";
 import { Server } from "./shims/socketIoServer";
 
+import morgan from "morgan";
 import {
   ALLOWED_ORIGINS,
+  IS_DEV,
   IS_PROD,
   ADMIN_BOOTSTRAP_EMAIL,
   ADMIN_BOOTSTRAP_PASSWORD,
@@ -70,10 +72,13 @@ import gearRoutes from "./routes/gears.routes";
 import importantNotice from "./routes/importantNotice.route";
 import insurance from "./routes/insurance.route";
 import WhyLoveThisTrek from "./routes/whyLoveThisTrek.route";
-import Addons from "./routes/addOnServices.route";
+import { addonsRoutes } from "./modules/addons";
+import { packageAddonsRoutes } from "./modules/package-addons";
 import basedSeason from "./routes/seasonInfo.routes";
 import captchaRoute from "./routes/captcha.route";
 import privateTripRoute from "./routes/privateTrip.route";
+import { paymentRoutes as paymentRoute, startPaymentReconcileCron } from "./modules/payment";
+import { sendTestInvoiceForPaidBookings } from "./utils/sendTestBookingInvoice";
 
 const app = express();
 const server = http.createServer(app);
@@ -124,10 +129,28 @@ app.use(
   })
 );
 
+// Capture raw text body for payment gateway webhooks (application/jose)
+// This must be registered before express.json() so the raw string is preserved.
+app.use(
+  "/api/v1/payment/webhook",
+  express.text({ type: ["application/jose", "text/plain", "*/*"], limit: "1mb" })
+);
+
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
+
+if (IS_DEV) {
+  app.use(
+    morgan("dev", {
+      stream: {
+        write: (message) => logger.info(message.trim()),
+      },
+    })
+  );
+}
+
 app.use(sanitizeHtmlMiddleware);
 
 // Get allowed origins from environment variable
@@ -293,8 +316,10 @@ app.use(
   gearRoutes,
   captchaRoute,
   video,
-  Addons,
-  privateTripRoute
+  packageAddonsRoutes,
+  addonsRoutes,
+  privateTripRoute,
+  paymentRoute
 );
 
 app.get("/api/active-users", (req: Request, res: Response) => {
@@ -315,11 +340,22 @@ app.get("/api/active-users", (req: Request, res: Response) => {
   }
 });
 
-app.get("/healthChecker", (req: Request, res: Response) => {
-  res.status(200).json({
-    status: "success",
-    message: "Welcome to Fly East Server.",
-  });
+const healthResponse = {
+  status: "success",
+  message: "Welcome to Fly East Server.",
+};
+
+app.get("/", (_req: Request, res: Response) => {
+  res.status(200).json(healthResponse);
+});
+
+app.get("/healthChecker", (_req: Request, res: Response) => {
+  res.status(200).json(healthResponse);
+});
+
+// Browsers/dev tools probe this to detect Chrome remote-debug endpoints
+app.get("/json/version", (_req: Request, res: Response) => {
+  res.status(404).end();
 });
 
 app.delete("/api/v1/cache/clear", async (_req: Request, res: Response) => {
@@ -345,10 +381,18 @@ app.all("*", (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-  res.status(err.statusCode || 500).json({
-    status: "error",
+  const statusCode = err.statusCode || 500;
+
+  if (statusCode === 404) {
+    logger.warn(`404 ${req.method} ${req.originalUrl}`);
+  } else {
+    logger.error(err);
+  }
+
+  res.status(statusCode).json({
+    status: err.status || "error",
     message: err.message || "Internal Server Error",
+    ...(err.errors ? { errors: err.errors } : {}),
   });
 });
 
@@ -398,6 +442,9 @@ server.listen(PORT, async () => {
     await connectDB();
     await createAdminIfNotPresent();
     await ensureContactIndexes();
+    startPaymentReconcileCron();
+
+    // await sendTestInvoiceForPaidBookings("lamap0000@gmail.com");
   } catch (error) {
     logger.error("❌ Failed to initialize app:", error);
     process.exit(1);

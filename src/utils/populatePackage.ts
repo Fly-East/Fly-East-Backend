@@ -117,11 +117,6 @@ export const populatePackage = async (
         options: { sort: { sortOrder: -1 } },
       },
       {
-        path: "addons",
-        model: "Addons",
-        options: { sort: { sortOrder: -1 } },
-      },
-      {
         path: "gallery",
         model: "Gallery",
         options: { sort: { sortOrder: -1 } },

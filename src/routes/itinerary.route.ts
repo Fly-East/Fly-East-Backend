@@ -9,15 +9,18 @@ import {
 } from "../controller/itinerary.controller";
 import { checkPermissions, isAdmin } from "../middleware/isAdmin";
 import { upload, handleMulterError } from "../middleware/multer.middleware";
+
 const router = Router();
 
-// Configure multer for single image field
-const uploadMiddleware = upload.single("image");
+const uploadItineraryMedia = upload.fields([
+  { name: "image", maxCount: 1 },
+  { name: "video", maxCount: 1 },
+]);
 
 // Create itinerary
 router.post(
   "/api/v1/itinerary/:packageId",
-  uploadMiddleware,
+  uploadItineraryMedia,
   handleMulterError,
   isAdmin,
   checkPermissions(["create"]),
@@ -33,7 +36,7 @@ router.get("/api/v1/itinerary/:id", isAdmin, getItinerary);
 // Update itinerary
 router.put(
   "/api/v1/itinerary/:id",
-  uploadMiddleware,
+  uploadItineraryMedia,
   handleMulterError,
   isAdmin,
   checkPermissions(["edit"]),
@@ -47,7 +50,6 @@ router.delete(
   checkPermissions(["delete"]),
   deleteItinerary
 );
-
 
 router.patch(
   "/api/v1/itinerary/sort-order/:packageId",

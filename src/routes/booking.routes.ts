@@ -2,7 +2,14 @@ import { Router } from "express";
 import bookingController from "../controller/booking.controller";
 
 const {
+  previewBooking,
+  quoteBookingAdmin,
   createBooking,
+  createAdminQuote,
+  checkoutBooking,
+  previewFinalQuote,
+  finalizeQuote,
+  getPublicQuote,
   getAllBookings,
   getBookingById,
   updateBookingStatus,
@@ -10,9 +17,69 @@ const {
   cancelBooking,
 } = bookingController;
 import { checkPermissions, isAdmin } from "../middleware/isAdmin";
+import { validate } from "../middleware/validate";
+import {
+  bookingPreviewSchema,
+  bookingQuoteSchema,
+  bookingLeadSchema,
+  bookingAdminQuoteSchema,
+  bookingCheckoutSchema,
+  bookingFinalQuoteSchema,
+  publicQuoteTokenSchema,
+} from "../schema/bookingQuote.schema";
 
 const router = Router();
-router.post("/api/v1/booking", createBooking);
+
+router.post(
+  "/api/v1/booking/preview",
+  validate(bookingPreviewSchema),
+  previewBooking
+);
+
+router.post(
+  "/api/v1/booking/quote",
+  isAdmin,
+  validate(bookingQuoteSchema),
+  quoteBookingAdmin
+);
+
+router.post("/api/v1/booking", validate(bookingLeadSchema), createBooking);
+
+router.post(
+  "/api/v1/booking/admin-quote",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(bookingAdminQuoteSchema),
+  createAdminQuote
+);
+
+router.post(
+  "/api/v1/booking/:id/checkout",
+  validate(bookingCheckoutSchema),
+  checkoutBooking
+);
+
+router.post(
+  "/api/v1/booking/:id/final-quote/preview",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(bookingFinalQuoteSchema),
+  previewFinalQuote
+);
+
+router.post(
+  "/api/v1/booking/:id/final-quote",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(bookingFinalQuoteSchema),
+  finalizeQuote
+);
+
+router.get(
+  "/api/v1/quote/:token",
+  validate(publicQuoteTokenSchema),
+  getPublicQuote
+);
 
 router.get("/api/v1/booking", isAdmin, getAllBookings);
 
@@ -32,7 +99,6 @@ router.delete(
   deleteBooking
 );
 
-// Cancel a booking
 router.patch(
   "/api/v1/booking/:id/cancel",
   isAdmin,

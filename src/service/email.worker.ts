@@ -56,9 +56,10 @@ export class EmailWorker {
                 job.data.templateData ?? {}
               )
             : undefined);
+        const text = job.data.text;
 
-        if (!html) {
-          throw new Error("Email job is missing html and template");
+        if (!html && !text) {
+          throw new Error("Email job is missing html/text and template");
         }
 
         const fromAddress = emailConfig.fromName
@@ -69,8 +70,8 @@ export class EmailWorker {
           from: fromAddress,
           to: job.data.to,
           subject: job.data.subject,
-          html,
-          text: job.data.text,
+          ...(html ? { html } : {}),
+          ...(text ? { text } : {}),
           attachments: resolveAttachments(job.data.attachments),
           cc: job.data.cc,
           bcc: job.data.bcc,

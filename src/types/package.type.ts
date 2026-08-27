@@ -66,5 +66,4 @@ export interface PackageType extends Document {
   insurance: Types.ObjectId[];
   seasonalTrek: Types.ObjectId[];
   whyLoveThisTrek: Types.ObjectId[];
-  addons: Types.ObjectId[];
 }

@@ -2,7 +2,7 @@ import {
   bookingConfirmationOwnerTemplate,
   bookingConfirmationTravelerTemplate,
 } from "./bookingConfirmation";
-import { bookingInvoiceTemplate } from "./bookingInvoice";
+import { bookingInvoiceTemplate, bookingInvoiceText } from "./bookingInvoice";
 import { bookingReplyTemplate } from "./bookingReply";
 import { customBookingReplyTemplate } from "./customBookingReply";
 import { detailedItineraryTemplate } from "./detailedItinerary";
@@ -10,11 +10,13 @@ import { forgotPasswordTemplate } from "./forgotPassword";
 import { inquiryNotificationTemplate } from "./inquiryNotification";
 import { inquiryReplyTemplate } from "./inquiryReply";
 import { contactReplyTemplate } from "./contactReply";
+import { finalQuoteEmailTemplate } from "./finalQuote";
 
 export {
   bookingConfirmationOwnerTemplate,
   bookingConfirmationTravelerTemplate,
   bookingInvoiceTemplate,
+  bookingInvoiceText,
   bookingReplyTemplate,
   customBookingReplyTemplate,
   detailedItineraryTemplate,
@@ -22,6 +24,7 @@ export {
   contactReplyTemplate,
   inquiryNotificationTemplate,
   inquiryReplyTemplate,
+  finalQuoteEmailTemplate,
 };
 
 export const renderMailTemplate = (
