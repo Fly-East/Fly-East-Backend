@@ -1,6 +1,7 @@
 services:
   backend:
     image: fly-east-test:latest
+    pull_policy: never
     container_name: fly-east-dev-server
 
     restart: unless-stopped

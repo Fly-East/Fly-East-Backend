@@ -27,29 +27,55 @@ jobs:
       - name: Build project
         run: pnpm build
 
-      - name: Sync files to VPS
+      - name: Prune to production dependencies
+        run: pnpm prune --prod
+
+      - name: Build Docker image
+        run: docker build -f Dockerfile.dev -t fly-east-test:latest .
+
+      - name: Save Docker image
+        run: docker save fly-east-test:latest | gzip > fly-east-test.tar.gz
+
+      - name: Prepare deploy bundle
+        run: |
+          mkdir -p deploy-bundle
+          cp fly-east-test.tar.gz docker-compose.dev.yml deploy-bundle/
+
+      - name: Sync image to VPS
         uses: burnett01/rsync-deployments@7.0.2
         with:
-          switches: -avzr --delete --exclude=.git --exclude=node_modules --exclude=.env --exclude=src
-          path: ./
+          switches: -avzr --delete --exclude=.env
+          path: deploy-bundle/
           remote_path: /var/www/fly-east-dev-server
           remote_host: ${{ secrets.VPS_HOST }}
           remote_user: ${{ secrets.VPS_USER }}
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Restart Docker container
+      - name: Load image and restart container
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
             cd /var/www/fly-east-dev-server
+
+            if [ ! -f .env ]; then
+              echo "Missing /var/www/fly-east-dev-server/.env on the server"
+              exit 1
+            fi
+
+            if [ ! -f fly-east-test.tar.gz ]; then
+              echo "Missing fly-east-test.tar.gz in deploy directory"
+              exit 1
+            fi
 
             docker compose -f docker-compose.dev.yml down
 
-            docker compose -f docker-compose.dev.yml build
+            docker load < fly-east-test.tar.gz
 
-            docker compose -f docker-compose.dev.yml up -d
+            docker compose -f docker-compose.dev.yml up -d --pull never
 
+            rm -f fly-east-test.tar.gz
             docker image prune -f
