@@ -118,6 +118,8 @@ export interface BookingType extends Document {
   finalizedBy?: Types.ObjectId;
   quoteTokenHash?: string;
   quoteTokenExpiresAt?: Date;
+  /** Full public quote URL (includes token) for traveler notifications */
+  quotePublicUrl?: string;
   seatsReserved?: boolean;
   seen: boolean;
   /** True after payment invoice email was queued to the traveller */

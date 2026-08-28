@@ -24,6 +24,11 @@ import {
 import pacoProvider from "../providers/paco.provider";
 import logger from "../../../utils/logger";
 import { sendBookingInvoice } from "../../invoice";
+import {
+  MESSAGE_TYPES,
+  NotificationService,
+} from "../../notifications";
+import { notifyBookingTravelers } from "../../notifications/service/traveler-notification.service";
 
 // ---------------------------------------------------------------------------
 // Provider registry — extend here when adding new gateways
@@ -69,6 +74,30 @@ function isSuccessfulPayment(status: GatewayPaymentStatus): boolean {
   );
 }
 
+async function dispatchTravelerPaymentStatusNotifications(
+  bookingId: string,
+  gatewayStatus: GatewayPaymentStatus,
+  previousStatus?: GatewayPaymentStatus
+): Promise<void> {
+  if (
+    gatewayStatus === GatewayPaymentStatus.CANCELLED &&
+    previousStatus &&
+    previousStatus !== GatewayPaymentStatus.CANCELLED &&
+    previousStatus !== GatewayPaymentStatus.PAID
+  ) {
+    await notifyBookingTravelers(MESSAGE_TYPES.PAYMENT_CANCELLED, bookingId);
+    return;
+  }
+
+  if (
+    gatewayStatus === GatewayPaymentStatus.AUTHORIZED &&
+    previousStatus !== GatewayPaymentStatus.AUTHORIZED &&
+    previousStatus !== GatewayPaymentStatus.PAID
+  ) {
+    await notifyBookingTravelers(MESSAGE_TYPES.PAYMENT_AUTHORIZED, bookingId);
+  }
+}
+
 /**
  * Sync booking paymentStatus (and confirm booking) from a gateway outcome.
  * Does not reopen cancelled bookings.
@@ -94,6 +123,30 @@ async function syncBookingFromGateway(
       ` (gateway: ${gatewayStatus})`
   );
   queueInvoiceIfPaid(bookingId, gatewayStatus);
+
+  if (isSuccessfulPayment(gatewayStatus) && bookingId) {
+    void Booking.findById(bookingId)
+      .select("bookingReference totalAmount currency personalInfo")
+      .lean()
+      .then((booking) => {
+        if (!booking) return;
+        return NotificationService.dispatch(MESSAGE_TYPES.PAYMENT_RECEIVED, {
+          source: "payment",
+          bookingId,
+          bookingReference: booking.bookingReference,
+          totalAmount: booking.totalAmount,
+          currency: booking.currency,
+          customerName: booking.personalInfo?.[0]?.fullName,
+          customerEmail: booking.personalInfo?.[0]?.email,
+          gatewayStatus,
+        });
+      })
+      .catch((err) => {
+        logger.error(
+          `[payment] Failed to dispatch payment notification for ${bookingId}: ${err}`
+        );
+      });
+  }
 }
 
 /** Fire-and-forget invoice email once payment succeeds (idempotent via booking.invoiceSent). */
@@ -376,7 +429,13 @@ export async function handleWebhook(
   // Match the exact order (not "latest for booking") so a late webhook for a
   // superseded session cannot overwrite a newer pending/paid payment.
   let payment = null;
+  let previousStatus: GatewayPaymentStatus | undefined;
   if (providerOrderRef) {
+    const existing = await Payment.findOne({ orderNo: providerOrderRef })
+      .select("status")
+      .lean();
+    previousStatus = existing?.status as GatewayPaymentStatus | undefined;
+
     payment = await Payment.findOneAndUpdate(
       { orderNo: providerOrderRef },
       {
@@ -392,6 +451,16 @@ export async function handleWebhook(
     );
   }
   if (!payment && bookingId) {
+    const existing = await Payment.findOne({
+      booking: bookingId,
+      provider: providerKey,
+      status: GatewayPaymentStatus.PENDING,
+    })
+      .sort({ initiatedAt: -1 })
+      .select("status")
+      .lean();
+    previousStatus = previousStatus ?? (existing?.status as GatewayPaymentStatus);
+
     payment = await Payment.findOneAndUpdate(
       {
         booking: bookingId,
@@ -420,6 +489,11 @@ export async function handleWebhook(
   // Update the booking's payment status (+ confirm when paid)
   if (bookingId) {
     await syncBookingFromGateway(bookingId, gatewayStatus);
+    await dispatchTravelerPaymentStatusNotifications(
+      bookingId,
+      gatewayStatus,
+      previousStatus
+    );
   }
 }
 
@@ -524,7 +598,13 @@ export async function reconcilePendingPayments(): Promise<void> {
 
         const bookingId = payment.booking?.toString();
         if (bookingId) {
+          const previousStatus = payment.status as GatewayPaymentStatus;
           await syncBookingFromGateway(bookingId, gatewayStatus);
+          await dispatchTravelerPaymentStatusNotifications(
+            bookingId,
+            gatewayStatus,
+            previousStatus
+          );
           logger.info(
             `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId})`
           );
@@ -570,6 +650,15 @@ export async function reconcilePendingPayments(): Promise<void> {
       logger.info(
         `[reconcile] Expired pending session ${payment.orderNo} after 2h (local_session_timeout)`
       );
+
+      const bookingId = payment.booking?.toString();
+      if (bookingId) {
+        await dispatchTravelerPaymentStatusNotifications(
+          bookingId,
+          GatewayPaymentStatus.CANCELLED,
+          GatewayPaymentStatus.PENDING
+        );
+      }
     } catch (err) {
       logger.error(`[reconcile] Failed to process orderNo=${payment.orderNo}: ${err}`);
     }

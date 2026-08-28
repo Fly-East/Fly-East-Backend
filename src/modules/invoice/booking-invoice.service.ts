@@ -1,17 +1,10 @@
 import Booking from "../../models/booking.model";
-import DetailedItinerary from "../../models/detailedItinerary.model";
-import { sendEmail } from "../email";
-import {
-  bookingInvoiceTemplate,
-  bookingInvoiceText,
-  type BookingInvoiceData,
-} from "../../mailtemplate/bookingInvoice";
 import { formatDate } from "../../mailtemplate/utils";
-import logger from "../../utils/logger";
-import { downloadCloudinaryAsset } from "../../utils/cloudinary";
 import { PaymentStatus } from "../../types/booking.type";
-import { generateBookingInvoicePdf } from "./invoice-pdf";
-import type { Attachment } from "nodemailer/lib/mailer";
+import type { BookingInvoiceData } from "../../mailtemplate/bookingInvoice";
+import logger from "../../utils/logger";
+import { MESSAGE_TYPES } from "../notifications/constants/messageType.constants";
+import { NotificationService } from "../notifications/service/notification.service";
 
 export type SendBookingInvoiceOptions = {
   /** Resend even if invoiceSent is already true */
@@ -143,7 +136,6 @@ export function buildBookingInvoiceData(booking: {
         }
       : undefined,
     invoiceDate: today,
-    // Only show due date for unpaid invoices
     dueDate: paid ? undefined : today,
     startDate: formatDate(booking.arrivalDate ?? undefined),
     endDate: formatDate(booking.departureDate ?? undefined),
@@ -166,58 +158,9 @@ export function buildBookingInvoiceData(booking: {
   };
 }
 
-function sanitizeFilenamePart(name: string): string {
-  return name
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
-    .replace(/\s+/g, " ")
-    .slice(0, 120);
-}
-
 /**
- * If a detailed itinerary PDF exists for the package, download it for attachment.
- * Failures are logged and ignored so the invoice email still sends.
- */
-async function fetchPackageItineraryAttachment(
-  packageId: string | undefined,
-  packageName?: string
-): Promise<Attachment | null> {
-  if (!packageId) return null;
-
-  try {
-    const detail = await DetailedItinerary.findOne({ package: packageId })
-      .select("pdf")
-      .lean();
-
-    if (!detail?.pdf?.url || !detail.pdf.publicId) {
-      logger.info(
-        `[invoice] No detailed itinerary PDF on file for package ${packageId}`
-      );
-      return null;
-    }
-
-    const content = await downloadCloudinaryAsset({
-      url: detail.pdf.url,
-      publicId: detail.pdf.publicId,
-      resourceType: detail.pdf.resourceType,
-    });
-
-    const safeName = sanitizeFilenamePart(packageName || "Package");
-    return {
-      filename: `${safeName}-detailed-Itinerary.pdf`,
-      content,
-      contentType: detail.pdf.mimeType || "application/pdf",
-    };
-  } catch (err) {
-    logger.warn(
-      `[invoice] Could not attach detailed itinerary for package ${packageId}: ${err}`
-    );
-    return null;
-  }
-}
-
-/**
- * Generates a booking invoice email and queues it to the primary traveller.
+ * Queues a payment confirmation (invoice/receipt) to the primary traveller
+ * via the configurable customer notification system.
  */
 export async function sendBookingInvoice(
   bookingId: string,
@@ -247,48 +190,12 @@ export async function sendBookingInvoice(
     return { sent: false, reason: "missing_email" };
   }
 
-  const invoiceData = buildBookingInvoiceData(booking as Parameters<
-    typeof buildBookingInvoiceData
-  >[0]);
-  const text = bookingInvoiceText(invoiceData);
-  const html = bookingInvoiceTemplate(invoiceData);
-  const pdfBuffer = await generateBookingInvoicePdf(invoiceData);
-  const paid = invoiceData.status === "PAID";
-
-  const packageId =
-    booking.package && typeof booking.package === "object" && "_id" in booking.package
-      ? String((booking.package as { _id: unknown })._id)
-      : booking.package
-        ? String(booking.package)
-        : undefined;
-
-  const attachments: Attachment[] = [
-    {
-      filename: `FlyEast-Invoice-${booking.bookingReference}.pdf`,
-      content: pdfBuffer,
-      contentType: "application/pdf",
-    },
-  ];
-
-  const itineraryAttachment = await fetchPackageItineraryAttachment(
-    packageId,
-    invoiceData.packageName
-  );
-  if (itineraryAttachment) {
-    attachments.push(itineraryAttachment);
-    logger.info(
-      `[invoice] Attached detailed itinerary PDF for booking ${booking.bookingReference}`
-    );
-  }
-
-  await sendEmail({
-    to,
-    subject: paid
-      ? `Payment receipt ${booking.bookingReference} — FlyEast Nepal`
-      : `Invoice ${booking.bookingReference} — FlyEast Nepal`,
-    html,
-    text,
-    attachments,
+  await NotificationService.dispatch(MESSAGE_TYPES.PAYMENT_CONFIRMATION, {
+    bookingId,
+    customerEmail: to,
+    customerPhone: primary?.phoneNumber,
+    customerName: primary?.fullName,
+    force: options.force,
   });
 
   await Booking.findByIdAndUpdate(bookingId, {
@@ -299,7 +206,7 @@ export async function sendBookingInvoice(
   });
 
   logger.info(
-    `[invoice] Queued invoice for booking ${booking.bookingReference} → ${to}`
+    `[invoice] Queued payment confirmation for booking ${booking.bookingReference} → ${to}`
   );
 
   return { sent: true, to };
