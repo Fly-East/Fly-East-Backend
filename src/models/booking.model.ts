@@ -138,6 +138,10 @@ const BookingSchema = new Schema<BookingType>(
     quoteTokenExpiresAt: {
       type: Date,
     },
+    quotePublicUrl: {
+      type: String,
+      trim: true,
+    },
     seatsReserved: {
       type: Boolean,
       default: false,

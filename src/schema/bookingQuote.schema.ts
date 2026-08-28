@@ -168,4 +168,16 @@ export const publicQuoteTokenSchema = z.object({
   }),
 });
 
+export const publicQuoteCancelSchema = z.object({
+  params: z.object({
+    token: z.string().min(16),
+  }),
+  body: z
+    .object({
+      reason: z.string().max(500).optional(),
+    })
+    .optional()
+    .default({}),
+});
+
 export type BookingFinalQuoteInput = z.infer<typeof bookingFinalQuoteSchema>;

@@ -5,6 +5,18 @@ import {
   INotificationChannel,
 } from "./channel.interface";
 import { NotificationJobPayload } from "../types/notifications.types";
+import type { Attachment } from "nodemailer/lib/mailer";
+
+const toEmailAttachments = (
+  attachments?: NotificationJobPayload["attachments"]
+): Attachment[] | undefined => {
+  if (!attachments?.length) return undefined;
+  return attachments.map((attachment) => ({
+    filename: attachment.filename,
+    content: attachment.content,
+    contentType: attachment.contentType,
+  }));
+};
 
 export class EmailChannelProvider implements INotificationChannel {
   readonly channel = NOTIFICATION_CHANNELS[0];
@@ -28,6 +40,7 @@ export class EmailChannelProvider implements INotificationChannel {
         subject: payload.subject ?? "Fly East Notification",
         html: payload.html,
         text: payload.body,
+        attachments: toEmailAttachments(payload.attachments),
       });
 
       return { status: "sent" };

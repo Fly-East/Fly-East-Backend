@@ -121,6 +121,12 @@ export const buildNotificationContent = (
     [MESSAGE_TYPES.QUOTE_FINALIZED]: "Quote Finalized",
     [MESSAGE_TYPES.BOOKING_CANCELLED]: "Booking Cancelled",
     [MESSAGE_TYPES.SYSTEM_ERROR]: "System Error Alert",
+    [MESSAGE_TYPES.PAYMENT_CONFIRMATION]: "Payment Confirmation",
+    [MESSAGE_TYPES.QUOTE_SENT]: "Quote Sent",
+    [MESSAGE_TYPES.BOOKING_CONFIRMATION]: "Booking Confirmation",
+    [MESSAGE_TYPES.PAYMENT_CANCELLED]: "Payment Cancelled",
+    [MESSAGE_TYPES.PAYMENT_AUTHORIZED]: "Payment Authorized",
+    [MESSAGE_TYPES.BOOKING_CANCELLED_CUSTOMER]: "Booking Cancelled (Traveler)",
   };
 
   const introMap: Record<MessageType, string> = {
@@ -135,6 +141,17 @@ export const buildNotificationContent = (
       "A booking quote has been finalized.",
     [MESSAGE_TYPES.BOOKING_CANCELLED]: "A booking has been cancelled.",
     [MESSAGE_TYPES.SYSTEM_ERROR]: "A system error occurred.",
+    [MESSAGE_TYPES.PAYMENT_CONFIRMATION]:
+      "Traveler payment confirmation notification.",
+    [MESSAGE_TYPES.QUOTE_SENT]: "Traveler quote notification.",
+    [MESSAGE_TYPES.BOOKING_CONFIRMATION]:
+      "Traveler booking confirmation notification.",
+    [MESSAGE_TYPES.PAYMENT_CANCELLED]:
+      "Traveler payment cancelled notification.",
+    [MESSAGE_TYPES.PAYMENT_AUTHORIZED]:
+      "Traveler payment authorized notification.",
+    [MESSAGE_TYPES.BOOKING_CANCELLED_CUSTOMER]:
+      "Traveler booking cancelled notification.",
   };
 
   const subject = subjectMap[messageType] ?? "Fly East Notification";

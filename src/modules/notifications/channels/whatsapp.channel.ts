@@ -25,6 +25,12 @@ const WHATSAPP_TEMPLATE_MAP: Partial<Record<string, string>> = {
   quote_finalized: "quote_finalized_alert",
   booking_cancelled: "booking_cancelled_alert",
   system_error: "system_error_alert",
+  payment_confirmation: "payment_confirmation",
+  quote_sent: "quote_sent",
+  booking_confirmation: "booking_confirmation",
+  payment_cancelled: "payment_cancelled",
+  payment_authorized: "payment_authorized",
+  booking_cancelled_customer: "booking_cancelled_customer",
 };
 
 export class WhatsAppChannelProvider implements INotificationChannel {

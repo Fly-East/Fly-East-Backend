@@ -51,6 +51,8 @@ export const updateMessageTypeSchema = object({
     isEnabled: boolean().optional(),
     label: string().optional(),
     description: string().optional(),
+    primaryChannel: channelEnum.optional(),
+    fallbackChannel: channelEnum.nullable().optional(),
   }),
 });
 

@@ -3,9 +3,9 @@ import logger from "../utils/logger";
 import { EmailQueue } from "./email.queue";
 import {
   bookingConfirmationOwnerTemplate,
-  bookingConfirmationTravelerTemplate,
   forgotPasswordTemplate,
 } from "../mailtemplate";
+import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
 import {
   ADMIN_EMAIL,
   FRONTEND_BASE_URL,
@@ -55,11 +55,23 @@ export class EmailService {
         `Sending booking confirmation for booking ${booking._id} to ${booking.personalInfo.length} travelers`
       );
 
-      const emailPromises = booking.personalInfo
+      const travelerPromises = booking.personalInfo
         .filter((traveler) => traveler && traveler.email)
-        .map((traveler) => this.sendEmailToTraveler(booking, traveler));
+        .map((traveler) =>
+          emitNotification(MESSAGE_TYPES.BOOKING_CONFIRMATION, {
+            bookingId: booking._id.toString(),
+            customerEmail: traveler.email,
+            customerPhone: traveler.phoneNumber,
+            customerName: traveler.fullName,
+            customerCountry: traveler.country,
+            tripType: booking.tripDetails.parentType,
+            arrivalDate: booking.tripDetails.arrivalDate,
+            departureDate: booking.tripDetails.departureDate,
+            message: booking.tripDetails.message,
+          })
+        );
 
-      await Promise.allSettled(emailPromises);
+      await Promise.allSettled(travelerPromises);
 
       if (this.COMPANY_EMAIL) {
         try {
@@ -76,57 +88,6 @@ export class EmailService {
       }
     } catch (error) {
       logger.error("Unexpected error in sendBookingConfirmation:", error);
-    }
-  }
-
-  private isValidEmail(email: string): boolean {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
-  }
-
-  private async sendEmailToTraveler(
-    booking: IBooking,
-    traveler: Traveler
-  ): Promise<void> {
-    try {
-      if (!this.isValidEmail(traveler.email)) {
-        logger.warn(
-          `Invalid email format for traveler ${traveler.fullName}: ${traveler.email}`
-        );
-        return;
-      }
-
-      const html = bookingConfirmationTravelerTemplate({
-        travelerName: traveler.fullName,
-        travelerEmail: traveler.email,
-        travelerPhone: traveler.phoneNumber,
-        travelerCountry: traveler.country,
-        bookingId: booking._id.toString(),
-        tripType: booking.tripDetails.parentType,
-        arrivalDate: this.formatDate(booking.tripDetails.arrivalDate),
-        departureDate: this.formatDate(booking.tripDetails.departureDate),
-        duration: this.getTripDuration(
-          booking.tripDetails.arrivalDate,
-          booking.tripDetails.departureDate
-        ),
-        message: booking.tripDetails.message,
-        contactEmail: this.COMPANY_EMAIL || undefined,
-      });
-      const text = this.generateCustomerEmailText(booking, traveler);
-
-      await this.sendEmail({
-        to: traveler.email,
-        subject: "Booking Confirmation",
-        text,
-        html,
-      });
-
-      logger.info(`Booking confirmation sent to traveler: ${traveler.email}`);
-    } catch (error) {
-      logger.error(
-        `Failed to send email to traveler ${traveler.email}:`,
-        error
-      );
     }
   }
 
@@ -169,47 +130,6 @@ export class EmailService {
       logger.error("Error sending email:", error);
       throw error;
     }
-  }
-
-  private generateCustomerEmailText(
-    booking: IBooking,
-    traveler: Traveler
-  ): string {
-    const contactLine = this.COMPANY_EMAIL
-      ? `For inquiries: ${this.COMPANY_EMAIL}`
-      : "For inquiries: reply to this email.";
-
-    return `Dear ${traveler.fullName},
-
-Thank you for your booking. Your booking has been successfully created.
-
-BOOKING DETAILS:
-Booking ID: ${booking._id}
-Trip Type: ${booking.tripDetails.parentType}
-Arrival Date: ${this.formatDate(booking.tripDetails.arrivalDate)}
-Departure Date: ${this.formatDate(booking.tripDetails.departureDate)}
-Duration: ${this.getTripDuration(
-      booking.tripDetails.arrivalDate,
-      booking.tripDetails.departureDate
-    )}
-
-YOUR INFORMATION:
-Full Name: ${traveler.fullName}
-Email: ${traveler.email}
-Country: ${traveler.country}
-Phone: ${traveler.phoneNumber}
-
-${
-  booking.tripDetails.message
-    ? `ADDITIONAL INFORMATION:\n${booking.tripDetails.message}\n`
-    : ""
-}
-
-We will contact you soon to confirm the details.
-${contactLine}
-
-Best regards,
-Support Team`;
   }
 
   private generateOwnerEmailText(booking: IBooking): string {

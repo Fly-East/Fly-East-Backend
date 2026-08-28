@@ -2,6 +2,7 @@ import { Document, Types } from "mongoose";
 import {
   MessageType,
   MessageTypeCategory,
+  MessageAudience,
   NotificationChannel,
   NotificationLogStatus,
   WhatsappStatus,
@@ -23,6 +24,9 @@ export interface IMessageTypeConfig extends Document {
   label: string;
   description: string;
   category: MessageTypeCategory;
+  audience: MessageAudience;
+  primaryChannel?: NotificationChannel;
+  fallbackChannel?: NotificationChannel | null;
   isEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -57,6 +61,12 @@ export interface PendingNotification {
   context: Record<string, unknown>;
 }
 
+export interface NotificationEmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface NotificationJobPayload {
   messageType: MessageType;
   channel: NotificationChannel;
@@ -64,9 +74,11 @@ export interface NotificationJobPayload {
   subject?: string;
   body?: string;
   html?: string;
+  attachments?: NotificationEmailAttachment[];
   contactPersonId?: string;
   subscriptionId?: string;
   fallbackChannel?: NotificationChannel | null;
+  audience?: MessageAudience;
   context: Record<string, unknown>;
   isFallback?: boolean;
 }

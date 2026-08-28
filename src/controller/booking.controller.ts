@@ -12,10 +12,9 @@ import Package from "../models/package.model";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 import { FixedDate } from "../models";
-import { sendEmail } from "../modules/email";
 import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
+import { notifyBookingTravelers } from "../modules/notifications/service/traveler-notification.service";
 import { Traveler } from "../service/email.service";
-import { finalQuoteEmailTemplate } from "../mailtemplate";
 import {
   BookingQuoteError,
   quoteBooking,
@@ -998,6 +997,14 @@ const cancelBooking = async (req: Request, res: Response) => {
       cancelledAt: booking.cancelledAt,
     });
 
+    void notifyBookingTravelers(
+      MESSAGE_TYPES.BOOKING_CANCELLED_CUSTOMER,
+      booking._id.toString(),
+      { reason: booking.cancellationReason }
+    ).catch((err) => {
+      logger.error("Failed to notify travelers of booking cancellation", err);
+    });
+
     res.status(200).json({
       status: "success",
       data: {
@@ -1256,6 +1263,8 @@ const finalizeQuote = async (req: Request, res: Response) => {
     }
     booking.quoteTokenHash = hashQuoteToken(rawToken);
     booking.quoteTokenExpiresAt = expires;
+    const origin = (FRONTEND_BASE_URL || FRONTEND_URL || "").replace(/\/$/, "");
+    booking.quotePublicUrl = `${origin}/quote/${rawToken}`;
     booking.totalAmount = snapshot.totalAmount;
     booking.currency = snapshot.currency;
 
@@ -1264,22 +1273,21 @@ const finalizeQuote = async (req: Request, res: Response) => {
     committed = true;
     session.endSession();
 
-    const origin = (FRONTEND_BASE_URL || FRONTEND_URL || "").replace(/\/$/, "");
-    const quoteUrl = `${origin}/quote/${rawToken}`;
+    const quoteUrl = booking.quotePublicUrl ?? "";
 
     let emailSent = true;
     try {
       for (const person of booking.personalInfo || []) {
-        const html = finalQuoteEmailTemplate({
-          recipientName: person.fullName,
-          publicView,
-          quoteUrl,
+        if (!person?.email) continue;
+        emitNotification(MESSAGE_TYPES.QUOTE_SENT, {
+          bookingId: booking._id?.toString(),
           bookingReference: booking.bookingReference,
-        });
-        await sendEmail({
-          to: [person.email],
-          subject: `Your quote for ${packageName}`,
-          html,
+          packageName,
+          quoteUrl,
+          publicView,
+          customerEmail: person.email,
+          customerName: person.fullName,
+          customerPhone: person.phoneNumber,
         });
       }
     } catch (emailError) {
@@ -1390,6 +1398,12 @@ const getPublicQuote = async (req: Request, res: Response) => {
         bookingStatus: booking.status,
         bookingReference: booking.bookingReference,
         gatewayPaymentStatus: latestPayment?.status ?? null,
+        paymentCancelled:
+          latestPayment?.status === GatewayPaymentStatus.CANCELLED,
+        canCancel:
+          booking.status !== BookingStatus.CANCELLED &&
+          booking.status !== BookingStatus.CONFIRMED &&
+          booking.paymentStatus !== PaymentStatus.PAID,
       },
     });
   } catch (error) {
@@ -1397,6 +1411,97 @@ const getPublicQuote = async (req: Request, res: Response) => {
     return res.status(500).json({
       status: "error",
       message: "Failed to load quote",
+    });
+  }
+};
+
+const cancelQuoteByToken = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const token = String(req.params.token || "");
+    const reason =
+      (req.body?.reason as string | undefined)?.trim() ||
+      "Cancelled by traveler via quote page";
+
+    if (!token || token.length < 16) {
+      return res.status(404).json({ status: "fail", message: "Quote not found" });
+    }
+
+    const hash = hashQuoteToken(token);
+    const booking = await Booking.findOne({ quoteTokenHash: hash }).session(session);
+
+    if (!booking || booking.quoteStatus !== QuoteStatus.QUOTED) {
+      return res.status(404).json({ status: "fail", message: "Quote not found" });
+    }
+
+    if (booking.status === BookingStatus.CANCELLED) {
+      return res.status(200).json({
+        status: "success",
+        message: "Booking was already cancelled",
+      });
+    }
+
+    if (booking.paymentStatus === PaymentStatus.PAID) {
+      return res.status(409).json({
+        status: "fail",
+        message: "This booking is already paid and cannot be cancelled online",
+      });
+    }
+
+    booking.status = BookingStatus.CANCELLED;
+    booking.cancellationReason = reason;
+    booking.cancelledAt = new Date();
+    booking.quoteStatus = QuoteStatus.EXPIRED;
+    booking.quoteTokenHash = undefined;
+    booking.quoteTokenExpiresAt = undefined;
+
+    await booking.save({ session });
+
+    if (booking.fixedDate && booking.seatsReserved) {
+      const fixedDate = await FixedDate.findById(booking.fixedDate).session(
+        session
+      );
+      if (fixedDate) {
+        await fixedDate.releaseSeats(booking.totalPeople);
+        await fixedDate.save({ session });
+        booking.seatsReserved = false;
+        await booking.save({ session });
+      }
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+    await clearCacheByPrefix("");
+
+    emitNotification(MESSAGE_TYPES.BOOKING_CANCELLED, {
+      bookingId: booking._id?.toString(),
+      bookingReference: booking.bookingReference,
+      reason: booking.cancellationReason,
+      cancelledAt: booking.cancelledAt,
+      source: "traveler_quote_page",
+    });
+
+    void notifyBookingTravelers(
+      MESSAGE_TYPES.BOOKING_CANCELLED_CUSTOMER,
+      booking._id.toString(),
+      { reason: booking.cancellationReason }
+    ).catch((err) => {
+      logger.error("Failed to notify travelers of quote cancellation", err);
+    });
+
+    return res.status(200).json({
+      status: "success",
+      message: "Booking cancelled",
+    });
+  } catch (error) {
+    await session.abortTransaction().catch(() => {});
+    session.endSession();
+    logger.error("Error cancelling booking via quote token:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Failed to cancel booking",
     });
   }
 };
@@ -1410,6 +1515,7 @@ const bookingController = {
   previewFinalQuote,
   finalizeQuote,
   getPublicQuote,
+  cancelQuoteByToken,
   getAllBookings,
   getBookingById,
   cancelBooking,

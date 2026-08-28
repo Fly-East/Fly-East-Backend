@@ -4,6 +4,7 @@ import MessageTypeConfig from "../model/messageTypeConfig.model";
 import NotificationLog from "../model/notificationLog.model";
 import NotificationSubscription from "../model/notificationSubscription.model";
 import { MessageType } from "../constants/messageType.constants";
+import { listNotificationChannels } from "../channels/channel.registry";
 import { NotificationService } from "../service/notification.service";
 import { handleWhatsAppStatusWebhook } from "../service/whatsapp.webhook.service";
 
@@ -89,6 +90,18 @@ export const listMessageTypes = async (
   }
 };
 
+export const listNotificationChannelsHandler = async (
+  _req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    res.json({ status: "success", data: listNotificationChannels() });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const updateMessageType = async (
   req: Request,
   res: Response,
@@ -138,6 +151,18 @@ export const createSubscription = async (
   next: NextFunction
 ) => {
   try {
+    const typeConfig = await MessageTypeConfig.findOne({
+      messageType: req.body.messageType,
+    }).lean();
+
+    if (typeConfig?.audience === "customer") {
+      return res.status(400).json({
+        status: "fail",
+        message:
+          "Customer-facing message types use global channel settings, not contact subscriptions",
+      });
+    }
+
     const subscription = await NotificationSubscription.create(req.body);
     const populated = await subscription.populate(
       "contactPersonId",

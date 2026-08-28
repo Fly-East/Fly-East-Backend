@@ -1,4 +1,5 @@
 import ContactPerson from "../model/contactPerson.model";
+import MessageTypeConfig from "../model/messageTypeConfig.model";
 import NotificationLog from "../model/notificationLog.model";
 import NotificationSubscription from "../model/notificationSubscription.model";
 import logger from "../../../utils/logger";
@@ -80,22 +81,34 @@ export const handleWhatsAppStatusWebhook = async (
         });
       }
 
-      if (errorCode === 131026 && log.contactPersonId) {
-        const subscription = await NotificationSubscription.findOne({
-          contactPersonId: log.contactPersonId,
-          primaryChannel: NOTIFICATION_CHANNELS[1],
-          messageType: log.messageType,
-        }).lean();
+      if (errorCode === 131026) {
+        const subscription = log.contactPersonId
+          ? await NotificationSubscription.findOne({
+              contactPersonId: log.contactPersonId,
+              primaryChannel: NOTIFICATION_CHANNELS[1],
+              messageType: log.messageType,
+            }).lean()
+          : null;
 
-        if (subscription?.fallbackChannel) {
+        let fallbackChannel = subscription?.fallbackChannel;
+
+        if (!fallbackChannel && !log.contactPersonId) {
+          const typeConfig = await MessageTypeConfig.findOne({
+            messageType: log.messageType,
+          }).lean();
+          fallbackChannel = typeConfig?.fallbackChannel ?? undefined;
+        }
+
+        if (fallbackChannel) {
           await NotificationService.dispatchFallback(
             {
               messageType: log.messageType,
               channel: NOTIFICATION_CHANNELS[1],
               to: log.recipient,
-              contactPersonId: log.contactPersonId.toString(),
-              subscriptionId: subscription._id.toString(),
-              fallbackChannel: subscription.fallbackChannel,
+              contactPersonId: log.contactPersonId?.toString(),
+              subscriptionId: subscription?._id.toString(),
+              fallbackChannel,
+              audience: log.contactPersonId ? "internal" : "customer",
               context: (log.context as Record<string, unknown>) ?? {},
             },
             errorMessage

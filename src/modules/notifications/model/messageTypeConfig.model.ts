@@ -1,8 +1,10 @@
 import { model, Schema } from "mongoose";
 import { IMessageTypeConfig } from "../types/notifications.types";
 import {
+  MESSAGE_AUDIENCES,
   MESSAGE_TYPE_CATEGORIES,
   MESSAGE_TYPE_VALUES,
+  NOTIFICATION_CHANNELS,
 } from "../constants/messageType.constants";
 
 const MessageTypeConfigSchema = new Schema<IMessageTypeConfig>(
@@ -27,6 +29,20 @@ const MessageTypeConfigSchema = new Schema<IMessageTypeConfig>(
       type: String,
       enum: MESSAGE_TYPE_CATEGORIES,
       required: true,
+    },
+    audience: {
+      type: String,
+      enum: MESSAGE_AUDIENCES,
+      default: "internal",
+    },
+    primaryChannel: {
+      type: String,
+      enum: NOTIFICATION_CHANNELS,
+    },
+    fallbackChannel: {
+      type: String,
+      enum: NOTIFICATION_CHANNELS,
+      default: null,
     },
     isEnabled: {
       type: Boolean,

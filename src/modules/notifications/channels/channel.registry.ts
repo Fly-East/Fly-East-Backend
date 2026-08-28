@@ -4,14 +4,15 @@ import {
 } from "../constants/messageType.constants";
 import { emailChannelProvider } from "./email.channel";
 import { INotificationChannel } from "./channel.interface";
-import { smsChannelProvider } from "./sms.channel";
 import { whatsappChannelProvider } from "./whatsapp.channel";
 
 const channels: Record<NotificationChannel, INotificationChannel> = {
-  [NOTIFICATION_CHANNELS[0]]: emailChannelProvider,
-  [NOTIFICATION_CHANNELS[1]]: whatsappChannelProvider,
-  [NOTIFICATION_CHANNELS[2]]: smsChannelProvider,
+  email: emailChannelProvider,
+  whatsapp: whatsappChannelProvider,
 };
+
+export { listNotificationChannels } from "./channel.definitions";
+export type { NotificationChannelDefinition } from "./channel.definitions";
 
 export const getChannelProvider = (
   channel: NotificationChannel

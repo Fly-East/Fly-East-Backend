@@ -18,11 +18,38 @@ const upsertMessageTypes = async (): Promise<void> => {
           label: definition.label,
           description: definition.description,
           category: definition.category,
+          audience: definition.audience,
         },
-        $setOnInsert: { isEnabled: true },
+        $setOnInsert: {
+          isEnabled: true,
+          ...(definition.defaultPrimaryChannel
+            ? { primaryChannel: definition.defaultPrimaryChannel }
+            : {}),
+          ...(definition.defaultFallbackChannel !== undefined
+            ? { fallbackChannel: definition.defaultFallbackChannel }
+            : {}),
+        },
       },
       { upsert: true, new: true }
     );
+
+    if (definition.audience === "customer" && definition.defaultPrimaryChannel) {
+      await MessageTypeConfig.updateOne(
+        {
+          messageType: definition.messageType,
+          $or: [
+            { primaryChannel: { $exists: false } },
+            { primaryChannel: null },
+          ],
+        },
+        {
+          $set: {
+            primaryChannel: definition.defaultPrimaryChannel,
+            fallbackChannel: definition.defaultFallbackChannel ?? null,
+          },
+        }
+      );
+    }
   }
 };
 

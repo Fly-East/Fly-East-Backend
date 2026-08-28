@@ -2,6 +2,8 @@ import { Types } from "mongoose";
 import { ADMIN_EMAIL, SUPPORT_EMAIL } from "../../../configs/env";
 import logger from "../../../utils/logger";
 import {
+  isCustomerMessageType,
+  MESSAGE_TYPE_DEFINITIONS,
   MESSAGE_TYPES,
   MessageType,
   NOTIFICATION_CHANNELS,
@@ -14,8 +16,10 @@ import NotificationSubscription from "../model/notificationSubscription.model";
 import { NotificationQueue } from "../queue/notification.queue";
 import { shouldSkipDuplicateNotification } from "./notification.dedupe";
 import { buildNotificationContent } from "../templates/notification.templates";
+import { buildCustomerNotificationContent } from "../templates/customer-notification.builder";
 import {
   IContactPerson,
+  IMessageTypeConfig,
   INotificationSubscription,
   NotificationJobPayload,
   PendingNotification,
@@ -29,6 +33,17 @@ const channelRecipient = (
     return contact.email ?? null;
   }
   return contact.phoneNumber ?? null;
+};
+
+const customerChannelRecipient = (
+  email: string | undefined,
+  phone: string | undefined,
+  channel: NotificationChannel
+): string | null => {
+  if (channel === NOTIFICATION_CHANNELS[0]) {
+    return email && email.includes("@") ? email : null;
+  }
+  return phone?.trim() ? phone.trim() : null;
 };
 
 const resolveChannel = (
@@ -47,6 +62,34 @@ const resolveChannel = (
 
   return channel;
 };
+
+const resolveCustomerChannel = (
+  email: string | undefined,
+  phone: string | undefined,
+  primaryChannel: NotificationChannel,
+  fallbackChannel?: NotificationChannel | null
+): { channel: NotificationChannel; recipient: string } | null => {
+  const primaryRecipient = customerChannelRecipient(email, phone, primaryChannel);
+  if (primaryRecipient) {
+    return { channel: primaryChannel, recipient: primaryRecipient };
+  }
+
+  if (fallbackChannel) {
+    const fallbackRecipient = customerChannelRecipient(
+      email,
+      phone,
+      fallbackChannel
+    );
+    if (fallbackRecipient) {
+      return { channel: fallbackChannel, recipient: fallbackRecipient };
+    }
+  }
+
+  return null;
+};
+
+const getTypeDefinition = (messageType: MessageType) =>
+  MESSAGE_TYPE_DEFINITIONS.find((definition) => definition.messageType === messageType);
 
 const buildJobForSubscription = (
   subscription: Pick<INotificationSubscription, "_id" | "fallbackChannel">,
@@ -76,6 +119,7 @@ const buildJobForSubscription = (
     contactPersonId: contact._id.toString(),
     subscriptionId: subscription._id.toString(),
     fallbackChannel: subscription.fallbackChannel ?? null,
+    audience: "internal",
     context,
     isFallback,
   };
@@ -105,6 +149,7 @@ const enqueueEnvFallback = async (
     subject: content.subject,
     html: content.html,
     body: content.body,
+    audience: "internal",
     context,
   };
 
@@ -135,7 +180,15 @@ export class NotificationService {
     }
 
     const typeConfig = await MessageTypeConfig.findOne({ messageType }).lean();
+    const definition = getTypeDefinition(messageType);
+    const audience = typeConfig?.audience ?? definition?.audience ?? "internal";
+
     if (typeConfig && !typeConfig.isEnabled) {
+      return;
+    }
+
+    if (isCustomerMessageType(audience)) {
+      await this.dispatchCustomer(messageType, context, typeConfig, definition);
       return;
     }
 
@@ -195,11 +248,133 @@ export class NotificationService {
     await NotificationQueue.addBulkJobs(jobs);
   }
 
+  static async dispatchCustomer(
+    messageType: MessageType,
+    context: Record<string, unknown>,
+    typeConfig?: Pick<
+      IMessageTypeConfig,
+      "primaryChannel" | "fallbackChannel" | "isEnabled"
+    > | null,
+    definition = getTypeDefinition(messageType)
+  ): Promise<void> {
+    const primaryChannel =
+      typeConfig?.primaryChannel ??
+      definition?.defaultPrimaryChannel ??
+      NOTIFICATION_CHANNELS[0];
+    const fallbackChannel =
+      typeConfig?.fallbackChannel ?? definition?.defaultFallbackChannel ?? null;
+
+    const customerEmail = context.customerEmail as string | undefined;
+    const customerPhone = context.customerPhone as string | undefined;
+
+    const resolved = resolveCustomerChannel(
+      customerEmail,
+      customerPhone,
+      primaryChannel,
+      fallbackChannel
+    );
+
+    if (!resolved) {
+      logger.warn(
+        `No reachable customer channel for ${messageType} (email=${customerEmail ?? "n/a"})`
+      );
+      return;
+    }
+
+    const content = await buildCustomerNotificationContent(
+      messageType,
+      resolved.channel,
+      context
+    );
+
+    if (!content) {
+      logger.warn(`Failed to build customer notification for ${messageType}`);
+      return;
+    }
+
+    const job: NotificationJobPayload = {
+      messageType,
+      channel: resolved.channel,
+      to: resolved.recipient,
+      subject: content.subject,
+      html: content.html,
+      body: content.body,
+      attachments: content.attachments,
+      fallbackChannel,
+      audience: "customer",
+      context,
+    };
+
+    await NotificationQueue.addJob(job);
+    await NotificationLog.create({
+      messageType,
+      channel: resolved.channel,
+      recipient: resolved.recipient,
+      status: "queued",
+      context,
+    });
+  }
+
   static async dispatchFallback(
     originalJob: NotificationJobPayload,
     error?: string
   ): Promise<void> {
     if (!originalJob.fallbackChannel || originalJob.isFallback) return;
+
+    if (originalJob.audience === "customer") {
+      const fallbackChannel = originalJob.fallbackChannel;
+      const customerEmail = originalJob.context.customerEmail as
+        | string
+        | undefined;
+      const customerPhone = originalJob.context.customerPhone as
+        | string
+        | undefined;
+      const recipient = customerChannelRecipient(
+        customerEmail,
+        customerPhone,
+        fallbackChannel
+      );
+
+      if (!recipient) return;
+
+      const content = await buildCustomerNotificationContent(
+        originalJob.messageType,
+        fallbackChannel,
+        {
+          ...originalJob.context,
+          fallbackReason: error,
+          originalChannel: originalJob.channel,
+        }
+      );
+
+      if (!content) return;
+
+      const fallbackJob: NotificationJobPayload = {
+        messageType: originalJob.messageType,
+        channel: fallbackChannel,
+        to: recipient,
+        subject: `[Fallback] ${content.subject}`,
+        html: content.html,
+        body: content.body,
+        attachments: content.attachments,
+        audience: "customer",
+        context: originalJob.context,
+        isFallback: true,
+      };
+
+      await NotificationQueue.addJob(fallbackJob);
+      await NotificationLog.create({
+        messageType: originalJob.messageType,
+        channel: fallbackChannel,
+        recipient,
+        status: "queued",
+        context: originalJob.context,
+        fallbackTriggered: true,
+        error,
+      });
+      return;
+    }
+
     if (!originalJob.contactPersonId) return;
 
     const contact = await ContactPerson.findById(
@@ -238,6 +413,7 @@ export class NotificationService {
       body: content.body,
       contactPersonId: originalJob.contactPersonId,
       subscriptionId: originalJob.subscriptionId,
+      audience: "internal",
       context: originalJob.context,
       isFallback: true,
     };

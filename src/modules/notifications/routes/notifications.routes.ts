@@ -9,6 +9,7 @@ import {
   handleWhatsAppWebhook,
   listContactPersons,
   listMessageTypes,
+  listNotificationChannelsHandler,
   listNotificationLogs,
   listSubscriptions,
   sendTestNotification,
@@ -66,6 +67,12 @@ router.get(
   "/api/v1/admin/notifications/message-types",
   isAdmin,
   listMessageTypes
+);
+
+router.get(
+  "/api/v1/admin/notifications/channels",
+  isAdmin,
+  listNotificationChannelsHandler
 );
 
 router.patch(
