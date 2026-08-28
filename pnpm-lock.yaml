@@ -83,6 +83,9 @@ importers:
       mongoose:
         specifier: ^6.0.11
         version: 6.13.8
+      morgan:
+        specifier: ^1.11.0
+        version: 1.11.0
       multer:
         specifier: ^1.4.5-lts.1
         version: 1.4.5-lts.2
@@ -210,9 +213,6 @@ importers:
       '@types/swagger-ui-express':
         specifier: ^4.1.3
         version: 4.1.8
-      morgan:
-        specifier: ^1.11.0
-        version: 1.11.0
       pino-pretty:
         specifier: ^13.0.0
         version: 13.1.1
