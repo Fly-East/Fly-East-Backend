@@ -13,6 +13,7 @@ import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 import { FixedDate } from "../models";
 import { sendEmail } from "../modules/email";
+import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
 import { Traveler } from "../service/email.service";
 import { finalQuoteEmailTemplate } from "../mailtemplate";
 import {
@@ -692,6 +693,17 @@ const checkoutBooking = async (req: Request, res: Response) => {
     await clearCacheByPrefix("bookings:");
     await clearCacheByPrefix("");
 
+    emitNotification(MESSAGE_TYPES.NEW_BOOKING, {
+      bookingId: booking._id?.toString(),
+      bookingReference: booking.bookingReference,
+      packageName,
+      customerName: booking.personalInfo?.[0]?.fullName,
+      customerEmail: booking.personalInfo?.[0]?.email,
+      totalAmount: booking.totalAmount,
+      currency: booking.currency,
+      totalPeople: booking.totalPeople,
+    });
+
     return res.status(200).json({
       status: "success",
       message: "Booking submitted. We'll send a finalized quote soon.",
@@ -978,8 +990,13 @@ const cancelBooking = async (req: Request, res: Response) => {
     await session.commitTransaction();
     session.endSession();
     await clearCacheByPrefix("");
-    // Optionally, send cancellation email
-    // await EmailService.sendBookingCancellationEmail(booking);
+
+    emitNotification(MESSAGE_TYPES.BOOKING_CANCELLED, {
+      bookingId: booking._id?.toString(),
+      bookingReference: booking.bookingReference,
+      reason: booking.cancellationReason,
+      cancelledAt: booking.cancelledAt,
+    });
 
     res.status(200).json({
       status: "success",
@@ -1279,6 +1296,15 @@ const finalizeQuote = async (req: Request, res: Response) => {
 
     await clearCacheByPrefix("bookings:");
     await clearCacheByPrefix("");
+
+    emitNotification(MESSAGE_TYPES.QUOTE_FINALIZED, {
+      bookingId: booking._id?.toString(),
+      bookingReference: booking.bookingReference,
+      packageName,
+      quoteUrl,
+      totalAmount: booking.finalPricing?.subtotal ?? booking.totalAmount,
+      currency: booking.currency,
+    });
 
     return res.status(200).json({
       status: "success",

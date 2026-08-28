@@ -24,6 +24,10 @@ import {
 import pacoProvider from "../providers/paco.provider";
 import logger from "../../../utils/logger";
 import { sendBookingInvoice } from "../../invoice";
+import {
+  MESSAGE_TYPES,
+  NotificationService,
+} from "../../notifications";
 
 // ---------------------------------------------------------------------------
 // Provider registry — extend here when adding new gateways
@@ -94,6 +98,30 @@ async function syncBookingFromGateway(
       ` (gateway: ${gatewayStatus})`
   );
   queueInvoiceIfPaid(bookingId, gatewayStatus);
+
+  if (isSuccessfulPayment(gatewayStatus) && bookingId) {
+    void Booking.findById(bookingId)
+      .select("bookingReference totalAmount currency personalInfo")
+      .lean()
+      .then((booking) => {
+        if (!booking) return;
+        return NotificationService.dispatch(MESSAGE_TYPES.PAYMENT_RECEIVED, {
+          source: "payment",
+          bookingId,
+          bookingReference: booking.bookingReference,
+          totalAmount: booking.totalAmount,
+          currency: booking.currency,
+          customerName: booking.personalInfo?.[0]?.fullName,
+          customerEmail: booking.personalInfo?.[0]?.email,
+          gatewayStatus,
+        });
+      })
+      .catch((err) => {
+        logger.error(
+          `[payment] Failed to dispatch payment notification for ${bookingId}: ${err}`
+        );
+      });
+  }
 }
 
 /** Fire-and-forget invoice email once payment succeeds (idempotent via booking.invoiceSent). */

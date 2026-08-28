@@ -78,6 +78,14 @@ import basedSeason from "./routes/seasonInfo.routes";
 import captchaRoute from "./routes/captcha.route";
 import privateTripRoute from "./routes/privateTrip.route";
 import { paymentRoutes as paymentRoute, startPaymentReconcileCron } from "./modules/payment";
+import {
+  notificationsRoutes,
+  notificationContextMiddleware,
+  NotificationWorker,
+  seedNotificationConfig,
+  emitNotification,
+  MESSAGE_TYPES,
+} from "./modules/notifications";
 import { sendTestInvoiceForPaidBookings } from "./utils/sendTestBookingInvoice";
 
 const app = express();
@@ -152,6 +160,7 @@ if (IS_DEV) {
 }
 
 app.use(sanitizeHtmlMiddleware);
+app.use(notificationContextMiddleware);
 
 // Get allowed origins from environment variable
 logger.info("Allowed Origins:", ALLOWED_ORIGINS);
@@ -239,6 +248,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(rateLimiter);
 FixedDateExpiryCron.start();
 EmailWorker.start();
+NotificationWorker.start();
 
 // Socket.IO configuration with simpler CORS
 const io = new Server(server, {
@@ -319,7 +329,8 @@ app.use(
   packageAddonsRoutes,
   addonsRoutes,
   privateTripRoute,
-  paymentRoute
+  paymentRoute,
+  notificationsRoutes
 );
 
 app.get("/api/active-users", (req: Request, res: Response) => {
@@ -389,6 +400,18 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     logger.error(err);
   }
 
+  if (statusCode >= 500) {
+    emitNotification(MESSAGE_TYPES.SYSTEM_ERROR, {
+      source: "http",
+      statusCode,
+      method: req.method,
+      path: req.originalUrl,
+      message: err.message || "Internal Server Error",
+      stack: err.stack,
+      userId: (req as any).user?._id?.toString?.(),
+    });
+  }
+
   res.status(statusCode).json({
     status: err.status || "error",
     message: err.message || "Internal Server Error",
@@ -443,6 +466,23 @@ server.listen(PORT, async () => {
     await createAdminIfNotPresent();
     await ensureContactIndexes();
     startPaymentReconcileCron();
+    await seedNotificationConfig();
+
+    process.on("unhandledRejection", (reason) => {
+      emitNotification(MESSAGE_TYPES.SYSTEM_ERROR, {
+        source: "unhandledRejection",
+        message: String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined,
+      });
+    });
+
+    process.on("uncaughtException", (error) => {
+      emitNotification(MESSAGE_TYPES.SYSTEM_ERROR, {
+        source: "uncaughtException",
+        message: error.message,
+        stack: error.stack,
+      });
+    });
 
     // await sendTestInvoiceForPaidBookings("lamap0000@gmail.com");
   } catch (error) {
