@@ -30,6 +30,9 @@ jobs:
       - name: Prune to production dependencies
         run: pnpm prune --prod
 
+      - name: Verify production bundle starts
+        run: node -e "require('morgan'); require('pino'); require('bcrypt');"
+
       - name: Build Docker image
         run: docker build -f Dockerfile.dev -t fly-east-test:latest .
 
