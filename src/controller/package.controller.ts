@@ -17,6 +17,40 @@ import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
 
+const SEASON_VALUES = ["spring", "summer", "autumn", "winter"] as const;
+
+const normalizeSeasonFromBody = (body: Record<string, unknown>): string[] => {
+  const raw = body.season;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((value) => String(value).trim().toLowerCase())
+      .filter((value): value is (typeof SEASON_VALUES)[number] =>
+        SEASON_VALUES.includes(value as (typeof SEASON_VALUES)[number]),
+      );
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return normalizeSeasonFromBody({ season: parsed });
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed
+      .replace(/[\[\]]/g, "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter((value): value is (typeof SEASON_VALUES)[number] =>
+        SEASON_VALUES.includes(value as (typeof SEASON_VALUES)[number]),
+      );
+  }
+  return [];
+};
+
 // Types for cache
 interface PackageCache {
   data: any[];
@@ -236,11 +270,14 @@ const buildPackageSummary = async (packageDoc: PackageDocument) => {
 const invalidatePackageCaches = async () => {
   await Promise.all([
     clearCacheByPrefix("packages:"),
+    clearCacheByPrefix("packages:detail:"),
     clearCacheByPrefix("popular:"),
     clearCacheByPrefix("packages:home"),
     clearCacheByPrefix("category:"),
   ]);
 };
+
+const detailCacheKey = (idOrSlug: string) => `packages:detail:${idOrSlug}`;
 
 const getPackageRevalidatePayload = (pkg: any, oldSlug?: string) => {
   const categoryId = pkg.categoryId?._id ?? pkg.categoryId;
@@ -248,6 +285,7 @@ const getPackageRevalidatePayload = (pkg: any, oldSlug?: string) => {
   return {
     slug: pkg.slug,
     oldSlug,
+    packageId: pkg._id?.toString(),
     categorySlug: pkg.categoryId?.slug,
     subCategoryId: subCategoryId?.toString(),
     subCategorySlug: pkg.subCategoryId?.slug,
@@ -373,6 +411,8 @@ export const createPackage = async (req: Request, res: Response) => {
       meal,
     } = req.body;
 
+    const seasons = normalizeSeasonFromBody(req.body);
+
     if (!name) throw new Error("Name is required");
     const normalizedAddToHome = toBoolean(addToHome);
     const normalizedIsPopular = toBoolean(isPopular);
@@ -418,6 +458,7 @@ export const createPackage = async (req: Request, res: Response) => {
       difficulty,
       accommodation,
       meal,
+      season: seasons,
     });
 
     await newPackage.save({ session });
@@ -602,6 +643,15 @@ export const getPackageById = async (req: Request, res: Response) => {
       });
     }
 
+    const cacheKey = detailCacheKey(id);
+    const cached = await getCache<{ status: string; data: unknown }>(cacheKey);
+    if (cached) {
+      return res.status(200).json({
+        ...cached,
+        fromCache: true,
+      });
+    }
+
     const query: any = mongoose.Types.ObjectId.isValid(id)
       ? { _id: id }
       : { slug: id };
@@ -615,10 +665,23 @@ export const getPackageById = async (req: Request, res: Response) => {
     }
 
     const responseData = await buildPackagePayload(pkgDoc);
+    const response = { status: "success" as const, data: responseData };
+
+    const cacheKeys = new Set<string>([
+      detailCacheKey(id),
+      detailCacheKey(pkgDoc._id.toString()),
+    ]);
+    if (pkgDoc.slug) {
+      cacheKeys.add(detailCacheKey(pkgDoc.slug));
+    }
+
+    await Promise.all(
+      [...cacheKeys].map((key) => setCache(key, response, CACHE_TTL)),
+    );
 
     res.status(200).json({
-      status: "success",
-      data: responseData,
+      ...response,
+      fromCache: false,
     });
   } catch (error) {
     logger.error("Error in getPackageById:", error);
@@ -713,6 +776,10 @@ export const updatePackage = async (req: Request, res: Response) => {
 
     if (req.body.packageType !== undefined) {
       updateData.packageType = normalizePackageType(req.body.packageType);
+    }
+
+    if (req.body.season !== undefined) {
+      updateData.season = normalizeSeasonFromBody(req.body);
     }
 
     // Handle cover image update if provided

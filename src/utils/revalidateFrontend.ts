@@ -7,6 +7,7 @@ import logger from "./logger";
 export type PackageRevalidatePayload = {
   slug?: string;
   oldSlug?: string;
+  packageId?: string;
   categorySlug?: string;
   subCategoryId?: string;
   subCategorySlug?: string;
