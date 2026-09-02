@@ -121,7 +121,7 @@ export const deleteSeasonalTrek = async (req: Request, res: Response) => {
     // Remove reference from package
     await Package.findByIdAndUpdate(
       trek.package,
-      { $pull: { seasonalTreks: trek._id } },
+      { $pull: { seasonalTrek: trek._id } },
       { session }
     );
 
