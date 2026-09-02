@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Category from "../models/category.model";
+import Package from "../models/package.model";
 import { Request, Response } from "express";
 import SubCategory from "../models/subcategory.model";
 import {
@@ -224,6 +225,25 @@ export const getCategoryById = async (req: Request, res: Response) => {
       })
       .lean();
 
+    const subCategories = categoryWithPagination?.subCategories || [];
+    const subCategoryIds = subCategories.map((sc: any) => sc._id);
+
+    let packageCountMap: Record<string, number> = {};
+    if (subCategoryIds.length > 0) {
+      const counts = await Package.aggregate([
+        { $match: { subCategoryId: { $in: subCategoryIds } } },
+        { $group: { _id: "$subCategoryId", packageCount: { $sum: 1 } } },
+      ]);
+      packageCountMap = Object.fromEntries(
+        counts.map((c) => [c._id.toString(), c.packageCount])
+      );
+    }
+
+    const subCategoriesWithCounts = subCategories.map((sc: any) => ({
+      ...sc,
+      packageCount: packageCountMap[sc._id.toString()] ?? 0,
+    }));
+
     // Calculate pagination metadata
     const totalPages = Math.ceil(totalSubCategories / limit);
     const hasNextPage = page < totalPages;
@@ -233,7 +253,7 @@ export const getCategoryById = async (req: Request, res: Response) => {
     const responseData = {
       data: {
         ...categoryData,
-        subCategories: categoryWithPagination?.subCategories || [],
+        subCategories: subCategoriesWithCounts,
       },
       pagination: {
         total: totalSubCategories,
