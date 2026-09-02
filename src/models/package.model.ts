@@ -22,6 +22,11 @@ const PackageSchema = new Schema<PackageType>(
     meal: {
       type: String,
     },
+    season: {
+      type: [String],
+      enum: ["spring", "summer", "autumn", "winter"],
+      default: [],
+    },
     makeBestSeller: {
       type: Boolean,
       default: false,

@@ -17,6 +17,40 @@ import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
 
+const SEASON_VALUES = ["spring", "summer", "autumn", "winter"] as const;
+
+const normalizeSeasonFromBody = (body: Record<string, unknown>): string[] => {
+  const raw = body.season;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((value) => String(value).trim().toLowerCase())
+      .filter((value): value is (typeof SEASON_VALUES)[number] =>
+        SEASON_VALUES.includes(value as (typeof SEASON_VALUES)[number]),
+      );
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return normalizeSeasonFromBody({ season: parsed });
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed
+      .replace(/[\[\]]/g, "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter((value): value is (typeof SEASON_VALUES)[number] =>
+        SEASON_VALUES.includes(value as (typeof SEASON_VALUES)[number]),
+      );
+  }
+  return [];
+};
+
 // Types for cache
 interface PackageCache {
   data: any[];
@@ -44,6 +78,7 @@ import Testimonial from "../models/testimonial.model";
 import Faq from "../models/faq.model";
 import { Pax } from "../models/pax.model";
 import logger from "../utils/logger";
+import { revalidateFrontendPackage } from "../utils/revalidateFrontend";
 import TripHighlight from "../models/triphighlights";
 import VisitPlace from "../models/visit-place.model";
 import Requirement from "../models/requirement.mode";
@@ -63,6 +98,17 @@ type PackageDocument = mongoose.Document<unknown, any, PackageType> &
 const VALID_PACKAGE_TYPES = ["luxury", "budget", "premium"] as const;
 
 type PackageTypeValue = (typeof VALID_PACKAGE_TYPES)[number];
+
+const formatUploadError = (field: string, error: unknown): string => {
+  const err = error as { message?: string };
+  const message = err?.message ?? "Upload failed";
+
+  if (message.includes("File size too large")) {
+    return `${field} is too large. Maximum allowed size is 10MB. Please compress the file and try again.`;
+  }
+
+  return `Failed to upload ${field}: ${message}`;
+};
 
 const normalizePackageType = (value: unknown): PackageTypeValue => {
   const normalized =
@@ -200,7 +246,10 @@ const buildPackagePayload = async (packageDoc: PackageDocument) => {
 const buildPackageSummary = async (packageDoc: PackageDocument) => {
   return {
     _id: packageDoc._id,
+    name: packageDoc.name,
     title: packageDoc.name,
+    categoryId: packageDoc.categoryId,
+    subCategoryId: packageDoc.subCategoryId,
     fixedDates: await getFixedDatesForPackage(packageDoc._id),
     slug: packageDoc.slug,
     coverImage: packageDoc.coverImage,
@@ -213,6 +262,34 @@ const buildPackageSummary = async (packageDoc: PackageDocument) => {
     addToHome: packageDoc.addToHome || false,
     sortOrder: packageDoc.sortOrder || 0,
     packageType: packageDoc.packageType || "budget",
+    updatedAt: (packageDoc as { updatedAt?: Date }).updatedAt,
+    createdAt: (packageDoc as { createdAt?: Date }).createdAt,
+  };
+};
+
+const invalidatePackageCaches = async () => {
+  await Promise.all([
+    clearCacheByPrefix("packages:"),
+    clearCacheByPrefix("packages:detail:"),
+    clearCacheByPrefix("popular:"),
+    clearCacheByPrefix("packages:home"),
+    clearCacheByPrefix("category:"),
+  ]);
+};
+
+const detailCacheKey = (idOrSlug: string) => `packages:detail:${idOrSlug}`;
+
+const getPackageRevalidatePayload = (pkg: any, oldSlug?: string) => {
+  const categoryId = pkg.categoryId?._id ?? pkg.categoryId;
+  const subCategoryId = pkg.subCategoryId?._id ?? pkg.subCategoryId;
+  return {
+    slug: pkg.slug,
+    oldSlug,
+    packageId: pkg._id?.toString(),
+    categorySlug: pkg.categoryId?.slug,
+    subCategoryId: subCategoryId?.toString(),
+    subCategorySlug: pkg.subCategoryId?.slug,
+    categoryId: categoryId?.toString(),
   };
 };
 
@@ -243,9 +320,16 @@ export const createPackage = async (req: Request, res: Response) => {
           filename: coverFile.originalname,
           contentType: coverFile.mimetype,
         });
-        if (coverUpload?.url) coverImageUrl = coverUpload.url;
+        if (coverUpload?.url) {
+          coverImageUrl = coverUpload.url;
+        } else {
+          throw new Error(
+            "Failed to upload cover image: no URL returned from storage."
+          );
+        }
       } catch (error) {
         logger.error("Error uploading cover image:", error);
+        throw new Error(formatUploadError("cover image", error));
       }
     }
 
@@ -293,9 +377,16 @@ export const createPackage = async (req: Request, res: Response) => {
           filename: routeMapFile.originalname,
           contentType: routeMapFile.mimetype,
         });
-        if (routeMapUpload?.url) routeMapUrl = routeMapUpload.url;
+        if (routeMapUpload?.url) {
+          routeMapUrl = routeMapUpload.url;
+        } else {
+          throw new Error(
+            "Failed to upload route map: no URL returned from storage."
+          );
+        }
       } catch (error) {
         logger.error("Error uploading route map:", error);
+        throw new Error(formatUploadError("route map", error));
       }
     }
 
@@ -319,6 +410,8 @@ export const createPackage = async (req: Request, res: Response) => {
       accommodation,
       meal,
     } = req.body;
+
+    const seasons = normalizeSeasonFromBody(req.body);
 
     if (!name) throw new Error("Name is required");
     const normalizedAddToHome = toBoolean(addToHome);
@@ -365,6 +458,7 @@ export const createPackage = async (req: Request, res: Response) => {
       difficulty,
       accommodation,
       meal,
+      season: seasons,
     });
 
     await newPackage.save({ session });
@@ -377,10 +471,8 @@ export const createPackage = async (req: Request, res: Response) => {
     const populatedPackage = await populatePackage(newPackage);
 
     // --- Clear Cache ---
-    await clearCacheByPrefix("packages:");
-    await clearCacheByPrefix("popular:");
-    await clearCacheByPrefix("packages:home");
-    await clearCacheByPrefix("");
+    await invalidatePackageCaches();
+    revalidateFrontendPackage(getPackageRevalidatePayload(populatedPackage));
     res.status(201).json({
       status: "success",
       message: "Package created successfully",
@@ -551,6 +643,15 @@ export const getPackageById = async (req: Request, res: Response) => {
       });
     }
 
+    const cacheKey = detailCacheKey(id);
+    const cached = await getCache<{ status: string; data: unknown }>(cacheKey);
+    if (cached) {
+      return res.status(200).json({
+        ...cached,
+        fromCache: true,
+      });
+    }
+
     const query: any = mongoose.Types.ObjectId.isValid(id)
       ? { _id: id }
       : { slug: id };
@@ -564,10 +665,23 @@ export const getPackageById = async (req: Request, res: Response) => {
     }
 
     const responseData = await buildPackagePayload(pkgDoc);
+    const response = { status: "success" as const, data: responseData };
+
+    const cacheKeys = new Set<string>([
+      detailCacheKey(id),
+      detailCacheKey(pkgDoc._id.toString()),
+    ]);
+    if (pkgDoc.slug) {
+      cacheKeys.add(detailCacheKey(pkgDoc.slug));
+    }
+
+    await Promise.all(
+      [...cacheKeys].map((key) => setCache(key, response, CACHE_TTL)),
+    );
 
     res.status(200).json({
-      status: "success",
-      data: responseData,
+      ...response,
+      fromCache: false,
     });
   } catch (error) {
     logger.error("Error in getPackageById:", error);
@@ -602,6 +716,8 @@ export const updatePackage = async (req: Request, res: Response) => {
         message: "Package not found",
       });
     }
+
+    const oldSlug = existingPackage.slug;
 
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
     const updateData: any = {};
@@ -662,6 +778,10 @@ export const updatePackage = async (req: Request, res: Response) => {
       updateData.packageType = normalizePackageType(req.body.packageType);
     }
 
+    if (req.body.season !== undefined) {
+      updateData.season = normalizeSeasonFromBody(req.body);
+    }
+
     // Handle cover image update if provided
     if (files?.coverImage?.[0]?.buffer) {
       try {
@@ -691,9 +811,21 @@ export const updatePackage = async (req: Request, res: Response) => {
             if (publicId) await deleteImage(publicId);
           }
           updateData.coverImage = uploadResult.secure_url;
+        } else {
+          await session.abortTransaction();
+          return res.status(400).json({
+            status: "error",
+            message:
+              "Failed to upload cover image: no URL returned from storage.",
+          });
         }
       } catch (error) {
         logger.error("Error uploading cover image:", error);
+        await session.abortTransaction();
+        return res.status(400).json({
+          status: "error",
+          message: formatUploadError("cover image", error),
+        });
       }
     }
 
@@ -726,9 +858,21 @@ export const updatePackage = async (req: Request, res: Response) => {
             if (publicId) await deleteImage(publicId);
           }
           updateData.routeMap = uploadResult.secure_url;
+        } else {
+          await session.abortTransaction();
+          return res.status(400).json({
+            status: "error",
+            message:
+              "Failed to upload route map: no URL returned from storage.",
+          });
         }
       } catch (error) {
         logger.error("Error uploading route map:", error);
+        await session.abortTransaction();
+        return res.status(400).json({
+          status: "error",
+          message: formatUploadError("route map", error),
+        });
       }
     }
 
@@ -775,10 +919,14 @@ export const updatePackage = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
 
-    // Invalidate popular and add-to-home cache
-    await clearCacheByPrefix("popular:");
-    await clearCacheByPrefix("packages:home");
-    await clearCacheByPrefix("");
+    // Invalidate package caches
+    await invalidatePackageCaches();
+    revalidateFrontendPackage(
+      getPackageRevalidatePayload(
+        populatedPackage,
+        oldSlug !== populatedPackage.slug ? oldSlug : undefined
+      )
+    );
     res.status(200).json({
       status: "success",
       data: populatedPackage,
@@ -817,6 +965,8 @@ export const deletePackage = async (req: Request, res: Response) => {
         message: "Package not found",
       });
     }
+
+    const populatedForRevalidate = await populatePackage(packageToDelete);
 
     // Get gallery images to delete
     const galleryImages = await Gallery.find({
@@ -897,12 +1047,10 @@ export const deletePackage = async (req: Request, res: Response) => {
 
     await Package.findByIdAndDelete(req.params.id).session(session);
     await session.commitTransaction();
-    // Invalidate all package cache
-    await clearCacheByPrefix("packages:");
-    // Invalidate popular and add-to-home cache
-    await clearCacheByPrefix("popular:");
-    await clearCacheByPrefix("packages:home");
-    await clearCacheByPrefix("");
+    await invalidatePackageCaches();
+    revalidateFrontendPackage(
+      getPackageRevalidatePayload(populatedForRevalidate)
+    );
     res.status(204).json({
       status: "success",
       message:
@@ -1031,7 +1179,7 @@ export const getPackagesByCategory = async (req: Request, res: Response) => {
     }
 
     const enrichedPackages = await Promise.all(
-      packages.map((packageDoc) => buildPackagePayload(packageDoc))
+      packages.map((packageDoc) => buildPackageSummary(packageDoc))
     );
 
     const pagination = buildPagination(total);
@@ -1153,7 +1301,7 @@ export const getPackagesBySubCategory = async (req: Request, res: Response) => {
     }
 
     const enrichedPackages = await Promise.all(
-      packages.map((packageDoc) => buildPackagePayload(packageDoc))
+      packages.map((packageDoc) => buildPackageSummary(packageDoc))
     );
 
     const pagination = buildPagination(total);
@@ -1323,7 +1471,8 @@ export const updatePackageCategory = async (req: Request, res: Response) => {
     }
 
     await session.commitTransaction();
-    await clearCacheByPrefix("");
+    await invalidatePackageCaches();
+    revalidateFrontendPackage(getPackageRevalidatePayload(updatedPackage));
     res.status(200).json({
       status: "success",
       message: "Package category and subcategory updated successfully",
