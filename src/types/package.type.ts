@@ -25,6 +25,7 @@ export interface PackageType extends Document {
   difficulty?: string;
   accommodation?: string;
   meal?: string;
+  season?: string[];
   tripHighlight: Types.ObjectId[];
   visitPlaces: Types.ObjectId[];
   addToHome: boolean;
