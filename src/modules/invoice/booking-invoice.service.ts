@@ -73,6 +73,11 @@ export function buildBookingInvoiceData(booking: {
     discountPercent?: number;
     packageBase?: number;
     subtotal?: number;
+    vatPercent?: number;
+    vatAmount?: number;
+    transactionChargePercent?: number;
+    transactionChargeAmount?: number;
+    grandTotal?: number;
     amountDueNow?: number;
   } | null;
   pricing?: {
@@ -82,6 +87,11 @@ export function buildBookingInvoiceData(booking: {
     discountPercent?: number;
     packageBase?: number;
     subtotal?: number;
+    vatPercent?: number;
+    vatAmount?: number;
+    transactionChargePercent?: number;
+    transactionChargeAmount?: number;
+    grandTotal?: number;
     amountDueNow?: number;
   } | null;
   package?: { name?: string; duration?: unknown } | string | null;
@@ -104,11 +114,21 @@ export function buildBookingInvoiceData(booking: {
     booking.totalAmount ??
     0;
   const totalAmount =
-    pricing?.amountDueNow ?? pricing?.subtotal ?? booking.totalAmount ?? 0;
+    pricing?.grandTotal ??
+    pricing?.amountDueNow ??
+    pricing?.subtotal ??
+    booking.totalAmount ??
+    0;
   const discountPercentage = pricing?.discountPercent ?? 0;
   const discountAmount =
-    discountPercentage > 0
-      ? Math.max(0, Math.round((originalTotal - totalAmount) * 100) / 100)
+    discountPercentage > 0 && pricing?.packageBase != null
+      ? Math.max(
+          0,
+          Math.round(
+            (pricing.packageBase - (pricing.subtotal ?? pricing.packageBase)) *
+              100
+          ) / 100
+        )
       : 0;
 
   const today = formatDate(new Date());

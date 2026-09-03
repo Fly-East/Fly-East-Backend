@@ -78,6 +78,7 @@ import basedSeason from "./routes/seasonInfo.routes";
 import captchaRoute from "./routes/captcha.route";
 import privateTripRoute from "./routes/privateTrip.route";
 import { paymentRoutes as paymentRoute, startPaymentReconcileCron } from "./modules/payment";
+import pricingSettingsRoute from "./routes/pricingSettings.routes";
 import {
   notificationsRoutes,
   notificationContextMiddleware,
@@ -330,7 +331,8 @@ app.use(
   addonsRoutes,
   privateTripRoute,
   paymentRoute,
-  notificationsRoutes
+  notificationsRoutes,
+  pricingSettingsRoute
 );
 
 app.get("/api/active-users", (req: Request, res: Response) => {

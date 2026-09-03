@@ -9,6 +9,7 @@ import {
   type CalculateBookingTotalResult,
   type SelectedAddonInput,
 } from "../utils/calculateBookingTotal";
+import { getPricingSettings } from "./pricingSettings.service";
 
 export type BookingQuoteAddonInput = {
   id: string;
@@ -25,8 +26,10 @@ export type BookingQuoteInput = {
   /** Required when quoting without a fixed date */
   basePricePerPerson?: number;
   totalPeople: number;
-  paymentOption?: "full" | "partial";
   addons?: BookingQuoteAddonInput[];
+  /** Optional overrides (admin final quote); otherwise global settings */
+  vatPercent?: number;
+  transactionChargePercent?: number;
 };
 
 export type BookingQuoteCovers = {
@@ -42,7 +45,12 @@ export type BookingQuotePublicView = {
   totalAmount: number;
   amountDueNow: number;
   currency: string;
-  paymentOption: "full" | "partial";
+  subtotal: number;
+  vatPercent: number;
+  vatAmount: number;
+  transactionChargePercent: number;
+  transactionChargeAmount: number;
+  grandTotal: number;
   covers: BookingQuoteCovers;
 };
 
@@ -97,7 +105,6 @@ export async function quoteBooking(
   const packageId = input.packageId;
   const fixedDateId = input.fixedDateId ? String(input.fixedDateId) : "";
   const totalPeople = Math.max(0, Math.floor(Number(input.totalPeople) || 0));
-  const paymentOption = input.paymentOption === "partial" ? "partial" : "full";
   const clientAddons = Array.isArray(input.addons) ? input.addons : [];
   const useCustomDates = !fixedDateId;
 
@@ -265,12 +272,23 @@ export async function quoteBooking(
   const pricePerPerson =
     basePricePerPerson * (1 - Math.min(100, discountPercent) / 100);
 
+  const globalFees = await getPricingSettings();
+  const vatPercent =
+    input.vatPercent !== undefined
+      ? Math.min(100, Math.max(0, Number(input.vatPercent) || 0))
+      : globalFees.vatPercent;
+  const transactionChargePercent =
+    input.transactionChargePercent !== undefined
+      ? Math.min(100, Math.max(0, Number(input.transactionChargePercent) || 0))
+      : globalFees.transactionChargePercent;
+
   const totals = calculateBookingTotal({
     totalPeople,
     pricePerPerson,
     tripDays,
     selectedAddons,
-    paymentOption,
+    vatPercent,
+    transactionChargePercent,
   });
 
   const included = totals.addonLines
@@ -290,10 +308,15 @@ export async function quoteBooking(
   };
 
   const publicView: BookingQuotePublicView = {
-    totalAmount: totals.subtotal,
-    amountDueNow: totals.total,
+    totalAmount: totals.grandTotal,
+    amountDueNow: totals.grandTotal,
     currency: "USD",
-    paymentOption,
+    subtotal: totals.subtotal,
+    vatPercent: totals.vatPercent,
+    vatAmount: totals.vatAmount,
+    transactionChargePercent: totals.transactionChargePercent,
+    transactionChargeAmount: totals.transactionChargeAmount,
+    grandTotal: totals.grandTotal,
     covers,
   };
 

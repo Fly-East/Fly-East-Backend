@@ -51,7 +51,10 @@ export type CalculateBookingTotalInput = {
   pricePerPerson: number;
   tripDays: number;
   selectedAddons: SelectedAddonInput[];
-  paymentOption?: "full" | "partial";
+  /** VAT % applied to subtotal (0–100) */
+  vatPercent?: number;
+  /** Transaction charge % applied to (subtotal + VAT) (0–100) */
+  transactionChargePercent?: number;
 };
 
 export type CalculateBookingTotalResult = {
@@ -66,7 +69,15 @@ export type CalculateBookingTotalResult = {
   /** Booked travelers + included + extra */
   totalPeopleOnTrip: number;
   participantSurcharge: number;
+  /** Pre-fee trip total */
   subtotal: number;
+  vatPercent: number;
+  vatAmount: number;
+  transactionChargePercent: number;
+  transactionChargeAmount: number;
+  /** Subtotal + VAT + transaction charge */
+  grandTotal: number;
+  /** Always equals grandTotal (full payment only) */
   total: number;
   pricePerPerson: number;
   totalPeople: number;
@@ -75,6 +86,16 @@ export type CalculateBookingTotalResult = {
 
 function toBool(value: unknown): boolean {
   return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function clampPercent(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(100, Math.max(0, n));
+}
+
+function round2(value: number): number {
+  return Math.round((Number(value) || 0) * 100) / 100;
 }
 
 /**
@@ -288,7 +309,10 @@ export function calculateBookingTotal(
   const totalPeople = Math.max(0, Number(input.totalPeople) || 0);
   const pricePerPerson = Math.max(0, Number(input.pricePerPerson) || 0);
   const tripDays = Math.max(1, Number(input.tripDays) || 1);
-  const paymentOption = input.paymentOption ?? "full";
+  const vatPercent = clampPercent(input.vatPercent);
+  const transactionChargePercent = clampPercent(
+    input.transactionChargePercent
+  );
   const selected = input.selectedAddons ?? [];
 
   const packageBase = pricePerPerson * totalPeople;
@@ -457,8 +481,12 @@ export function calculateBookingTotal(
 
   const participantSurcharge = surchargeParticipants * pricePerPerson;
   const subtotal = packageBase + addonsTotal + participantSurcharge;
-  const total =
-    paymentOption === "partial" ? subtotal * 0.5 : subtotal;
+  const vatAmount = round2(subtotal * (vatPercent / 100));
+  const transactionChargeAmount = round2(
+    (subtotal + vatAmount) * (transactionChargePercent / 100)
+  );
+  const grandTotal = round2(subtotal + vatAmount + transactionChargeAmount);
+  const total = grandTotal;
   const totalPeopleOnTrip =
     totalPeople + includedParticipants + extraParticipants;
 
@@ -471,6 +499,11 @@ export function calculateBookingTotal(
     totalPeopleOnTrip,
     participantSurcharge,
     subtotal,
+    vatPercent,
+    vatAmount,
+    transactionChargePercent,
+    transactionChargeAmount,
+    grandTotal,
     total,
     pricePerPerson,
     totalPeople,

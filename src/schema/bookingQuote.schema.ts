@@ -12,7 +12,6 @@ const quoteBody = z.object({
     .number({ required_error: "totalPeople is required" })
     .int()
     .min(1),
-  paymentOption: z.enum(["full", "partial"]).optional().default("full"),
   addons: z.array(addonSelection).optional().default([]),
 });
 
@@ -48,7 +47,6 @@ export const bookingLeadSchema = z.object({
 export const bookingCheckoutSchema = z.object({
   body: z
     .object({
-      paymentOption: z.enum(["full", "partial"]).optional(),
       totalPeople: z.number().int().min(1).optional(),
       addons: z.array(addonSelection).optional(),
       fixedDateId: z.string().optional(),
@@ -83,7 +81,6 @@ export const bookingAdminQuoteSchema = z.object({
         .number({ required_error: "totalPeople is required" })
         .int()
         .min(1),
-      paymentOption: z.enum(["full", "partial"]).optional().default("full"),
       addons: z.array(addonSelection).optional().default([]),
       personalInfo: z.union([
         personalInfoSchema,
@@ -148,7 +145,6 @@ export const bookingFinalQuoteSchema = z.object({
   body: z.object({
     basePricePerPerson: z.number().min(0),
     discountPercent: z.number().min(0).max(100),
-    paymentOption: z.enum(["full", "partial"]).optional().default("full"),
     totalPeople: z.number().int().min(1).optional(),
     tripDays: z.number().int().min(1).optional(),
     arrivalDate: z.string().optional().nullable(),
@@ -156,6 +152,10 @@ export const bookingFinalQuoteSchema = z.object({
     /** When true, drop fixedDate so no seats are reserved */
     useCustomDates: z.boolean().optional(),
     addons: z.array(finalQuoteAddonDraft).optional().default([]),
+    /** Optional override of global VAT % for this quote */
+    vatPercent: z.number().min(0).max(100).optional(),
+    /** Optional override of global transaction charge % for this quote */
+    transactionChargePercent: z.number().min(0).max(100).optional(),
   }),
   params: z.object({
     id: z.string().min(1),

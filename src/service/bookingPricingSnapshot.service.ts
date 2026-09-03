@@ -12,6 +12,7 @@ import {
   calculateBookingTotal,
   type SelectedAddonInput,
 } from "../utils/calculateBookingTotal";
+import { getPricingSettings } from "./pricingSettings.service";
 
 export type BookingPricingSnapshotPayload = {
   selectedAddons: BookingSelectedAddonSnapshot[];
@@ -36,11 +37,13 @@ export type FinalQuoteAddonDraft = {
 export type RecalculateFromDraftInput = {
   totalPeople: number;
   tripDays: number;
-  paymentOption?: "full" | "partial";
   basePricePerPerson: number;
   discountPercent: number;
   currency?: string;
   addons: FinalQuoteAddonDraft[];
+  /** When set, override global settings for this final quote */
+  vatPercent?: number;
+  transactionChargePercent?: number;
 };
 
 function asPricingType(value: string | undefined): AddonPricingType {
@@ -56,6 +59,29 @@ function toObjectIdIfValid(id?: string): Types.ObjectId | undefined {
   return new Types.ObjectId(id);
 }
 
+function feeFieldsFromTotals(totals: {
+  vatPercent: number;
+  vatAmount: number;
+  transactionChargePercent: number;
+  transactionChargeAmount: number;
+  grandTotal: number;
+}): Pick<
+  BookingPricingSnapshot,
+  | "vatPercent"
+  | "vatAmount"
+  | "transactionChargePercent"
+  | "transactionChargeAmount"
+  | "grandTotal"
+> {
+  return {
+    vatPercent: totals.vatPercent,
+    vatAmount: totals.vatAmount,
+    transactionChargePercent: totals.transactionChargePercent,
+    transactionChargeAmount: totals.transactionChargeAmount,
+    grandTotal: totals.grandTotal,
+  };
+}
+
 function linesToPayload(
   lines: BookingSelectedAddonSnapshot[],
   pricing: BookingPricingSnapshot
@@ -64,10 +90,13 @@ function linesToPayload(
     .map((line) => line.addonId)
     .filter((id): id is Types.ObjectId => Boolean(id));
 
+  const totalAmount =
+    pricing.grandTotal ?? pricing.amountDueNow ?? pricing.subtotal;
+
   return {
     selectedAddons: lines,
     pricing,
-    totalAmount: pricing.subtotal,
+    totalAmount,
     currency: pricing.currency,
     addonIds,
   };
@@ -125,7 +154,8 @@ export function buildBookingPricingSnapshot(
     extraParticipants: fullBreakdown.extraParticipants,
     totalPeopleOnTrip: fullBreakdown.totalPeopleOnTrip,
     subtotal: fullBreakdown.subtotal,
-    paymentOption: publicView.paymentOption,
+    ...feeFieldsFromTotals(fullBreakdown),
+    paymentOption: "full",
     amountDueNow: publicView.amountDueNow,
   };
 
@@ -136,19 +166,27 @@ export function buildBookingPricingSnapshot(
   return linesToPayload(selectedAddons, pricing);
 }
 
-export function recalculateFromDraft(
+export async function recalculateFromDraft(
   input: RecalculateFromDraftInput
-): BookingPricingSnapshotPayload {
+): Promise<BookingPricingSnapshotPayload> {
   const totalPeople = Math.max(1, Math.floor(Number(input.totalPeople) || 1));
   const tripDays = Math.max(1, Math.floor(Number(input.tripDays) || 1));
-  const paymentOption = input.paymentOption === "partial" ? "partial" : "full";
   const basePricePerPerson = Math.max(0, Number(input.basePricePerPerson) || 0);
   const discountPercent = Math.min(
     100,
     Math.max(0, Number(input.discountPercent) || 0)
   );
-  const pricePerPerson =
-    basePricePerPerson * (1 - discountPercent / 100);
+  const pricePerPerson = basePricePerPerson * (1 - discountPercent / 100);
+
+  const globalFees = await getPricingSettings();
+  const vatPercent =
+    input.vatPercent !== undefined
+      ? Math.min(100, Math.max(0, Number(input.vatPercent) || 0))
+      : globalFees.vatPercent;
+  const transactionChargePercent =
+    input.transactionChargePercent !== undefined
+      ? Math.min(100, Math.max(0, Number(input.transactionChargePercent) || 0))
+      : globalFees.transactionChargePercent;
 
   const selectedAddons: SelectedAddonInput[] = (input.addons ?? []).map(
     (draft, index) => {
@@ -180,7 +218,8 @@ export function recalculateFromDraft(
     pricePerPerson,
     tripDays,
     selectedAddons,
-    paymentOption,
+    vatPercent,
+    transactionChargePercent,
   });
 
   const lines: BookingSelectedAddonSnapshot[] = totals.addonLines.map(
@@ -229,8 +268,9 @@ export function recalculateFromDraft(
     extraParticipants: totals.extraParticipants,
     totalPeopleOnTrip: totals.totalPeopleOnTrip,
     subtotal: totals.subtotal,
-    paymentOption,
-    amountDueNow: totals.total,
+    ...feeFieldsFromTotals(totals),
+    paymentOption: "full",
+    amountDueNow: totals.grandTotal,
   };
 
   return linesToPayload(lines, pricing);
@@ -251,11 +291,23 @@ export function toPublicView(
     .filter((line) => !line.isDefault)
     .map((line) => ({ name: line.name, quantity: line.quantity }));
 
+  const grandTotal =
+    pricing.grandTotal ?? pricing.amountDueNow ?? pricing.subtotal;
+  const vatPercent = pricing.vatPercent ?? 0;
+  const vatAmount = pricing.vatAmount ?? 0;
+  const transactionChargePercent = pricing.transactionChargePercent ?? 0;
+  const transactionChargeAmount = pricing.transactionChargeAmount ?? 0;
+
   return {
-    totalAmount: pricing.subtotal,
-    amountDueNow: pricing.amountDueNow,
+    totalAmount: grandTotal,
+    amountDueNow: pricing.amountDueNow ?? grandTotal,
     currency: pricing.currency || "USD",
-    paymentOption: pricing.paymentOption,
+    subtotal: pricing.subtotal,
+    vatPercent,
+    vatAmount,
+    transactionChargePercent,
+    transactionChargeAmount,
+    grandTotal,
     covers: {
       packageName: packageName || "Package",
       tripDays: pricing.tripDays,
