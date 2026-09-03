@@ -104,13 +104,18 @@ async function buildPaymentConfirmationContent(
   if (!bookingId) return null;
 
   const booking = await Booking.findById(bookingId)
-    .populate("package", "name duration")
+    .populate({
+      path: "package",
+      select: "name duration inclusion",
+      populate: { path: "inclusion", select: "title description" },
+    })
     .lean();
 
   if (!booking) return null;
 
   const invoiceData = buildBookingInvoiceData(
-    booking as Parameters<typeof buildBookingInvoiceData>[0]
+    booking as Parameters<typeof buildBookingInvoiceData>[0],
+    { includeBreakdown: Boolean(context.includeBreakdown) }
   );
   const paid = invoiceData.status === "PAID";
   const subject = paid
@@ -129,6 +134,17 @@ async function buildPaymentConfirmationContent(
   const html = bookingInvoiceTemplate(invoiceData);
   const body = bookingInvoiceText(invoiceData);
   const pdfBuffer = await generateBookingInvoicePdf(invoiceData);
+
+  if (!pdfBuffer?.length) {
+    logger.error(
+      `[customer-notification] Invoice PDF is empty for ${booking.bookingReference}`
+    );
+    throw new Error("Generated invoice PDF is empty");
+  }
+
+  logger.info(
+    `[customer-notification] Invoice PDF ${pdfBuffer.length} bytes for ${booking.bookingReference}`
+  );
 
   const packageId =
     booking.package && typeof booking.package === "object" && "_id" in booking.package

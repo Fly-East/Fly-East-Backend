@@ -47,6 +47,16 @@ const normalizeAttachments = (
       } else if (attachment.content instanceof Uint8Array) {
         normalized.content = Buffer.from(attachment.content).toString("base64");
         normalized.encoding = "base64";
+      } else if (
+        typeof attachment.content === "object" &&
+        (attachment.content as { type?: string }).type === "Buffer" &&
+        Array.isArray((attachment.content as { data?: unknown }).data)
+      ) {
+        // JSON-revived Buffer from a queue hop
+        normalized.content = Buffer.from(
+          (attachment.content as { data: number[] }).data
+        ).toString("base64");
+        normalized.encoding = "base64";
       }
     }
 

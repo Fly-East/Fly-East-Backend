@@ -16,6 +16,15 @@ interface BillingAddressInfo {
   country?: string;
 }
 
+export type BookingInvoiceAddonLine = {
+  name: string;
+  quantity: number;
+  lineTotal: number;
+  isDefault: boolean;
+  unitPrice?: number;
+  formula?: string;
+};
+
 export interface BookingInvoiceData {
   bookingReference: string;
   invoiceNumber?: string;
@@ -28,10 +37,25 @@ export interface BookingInvoiceData {
   packageName?: string;
   duration?: string | number;
   totalPeople?: number;
+  /** When true, PDF shows full pricing + addon amounts */
+  includeBreakdown?: boolean;
+  /** Names of inclusions / add-ons for the simple (no pricing) view */
+  includedOnTrip?: Array<{ name: string; quantity: number; isDefault?: boolean }>;
+  /** Priced addon lines for breakdown view */
+  addonLines?: BookingInvoiceAddonLine[];
   basePricePerPerson?: number;
+  packageBase?: number;
+  addonsTotal?: number;
+  participantSurcharge?: number;
   originalTotal?: number;
   discountPercentage?: number;
   discountAmount?: number;
+  /** Trip subtotal before VAT / transaction charge */
+  subtotal?: number;
+  vatPercent?: number;
+  vatAmount?: number;
+  transactionChargePercent?: number;
+  transactionChargeAmount?: number;
   totalAmount?: number;
   status?: string;
 }
@@ -75,6 +99,7 @@ export const bookingInvoiceText = (data: BookingInvoiceData): string => {
     paid
       ? "Your payment receipt PDF is attached to this email."
       : "Your invoice PDF is attached to this email.",
+    "Taxes, transaction fees, and government fees are included in the total.",
     "If a detailed itinerary is available for your package, it is also attached.",
     "",
     "Questions? Contact billing@flyeastnepal.com",
