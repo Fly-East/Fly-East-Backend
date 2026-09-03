@@ -24,22 +24,23 @@ function reviveAttachmentContent(
     return content;
   }
 
-  if (content instanceof Uint8Array) {
-    return Buffer.from(content);
-  }
-
   if (typeof content === "string") {
     return content;
   }
 
-  // BullMQ / JSON revive of Node Buffer
+  // Runtime shapes that may arrive after JSON / queue hops
+  const raw = content as unknown;
+  if (raw instanceof Uint8Array) {
+    return Buffer.from(raw);
+  }
+
   if (
-    content &&
-    typeof content === "object" &&
-    (content as { type?: string }).type === "Buffer" &&
-    Array.isArray((content as { data?: unknown }).data)
+    raw &&
+    typeof raw === "object" &&
+    (raw as { type?: string }).type === "Buffer" &&
+    Array.isArray((raw as { data?: unknown }).data)
   ) {
-    return Buffer.from((content as { data: number[] }).data);
+    return Buffer.from((raw as { data: number[] }).data);
   }
 
   return null;

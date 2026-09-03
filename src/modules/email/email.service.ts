@@ -44,19 +44,23 @@ const normalizeAttachments = (
       } else if (Buffer.isBuffer(attachment.content)) {
         normalized.content = attachment.content.toString("base64");
         normalized.encoding = "base64";
-      } else if (attachment.content instanceof Uint8Array) {
-        normalized.content = Buffer.from(attachment.content).toString("base64");
-        normalized.encoding = "base64";
-      } else if (
-        typeof attachment.content === "object" &&
-        (attachment.content as { type?: string }).type === "Buffer" &&
-        Array.isArray((attachment.content as { data?: unknown }).data)
-      ) {
-        // JSON-revived Buffer from a queue hop
-        normalized.content = Buffer.from(
-          (attachment.content as { data: number[] }).data
-        ).toString("base64");
-        normalized.encoding = "base64";
+      } else {
+        const raw = attachment.content as unknown;
+        if (raw instanceof Uint8Array) {
+          normalized.content = Buffer.from(raw).toString("base64");
+          normalized.encoding = "base64";
+        } else if (
+          raw &&
+          typeof raw === "object" &&
+          (raw as { type?: string }).type === "Buffer" &&
+          Array.isArray((raw as { data?: unknown }).data)
+        ) {
+          // JSON-revived Buffer from a queue hop
+          normalized.content = Buffer.from(
+            (raw as { data: number[] }).data
+          ).toString("base64");
+          normalized.encoding = "base64";
+        }
       }
     }
 

@@ -37,16 +37,17 @@ function serializeAttachments(
       };
     }
 
-    if (attachment.content instanceof Uint8Array) {
+    // Runtime shapes that may arrive before/after JSON serialization
+    const maybe = attachment.content as unknown;
+    if (maybe instanceof Uint8Array) {
       return {
         ...attachment,
-        content: Buffer.from(attachment.content).toString("base64"),
+        content: Buffer.from(maybe).toString("base64"),
         encoding: "base64" as const,
       };
     }
 
     // Already a serialized Node Buffer shape from a previous hop
-    const maybe = attachment.content as unknown;
     if (
       maybe &&
       typeof maybe === "object" &&
