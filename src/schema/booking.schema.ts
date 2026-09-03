@@ -41,7 +41,6 @@ const payload = {
 
     emergencyRelationship: string().optional(),
 
-    paymentOption: string().optional(),
     paymentId: string().optional(),
 
     totalAmount: number().optional(),

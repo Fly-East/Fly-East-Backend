@@ -57,7 +57,6 @@ const previewBooking = async (req: Request, res: Response) => {
       package: packageId,
       fixedDateId,
       totalPeople,
-      paymentOption,
       addons,
     } = req.body;
 
@@ -65,7 +64,6 @@ const previewBooking = async (req: Request, res: Response) => {
       packageId,
       fixedDateId,
       totalPeople,
-      paymentOption,
       addons,
     });
 
@@ -95,7 +93,6 @@ const quoteBookingAdmin = async (req: Request, res: Response) => {
       package: packageId,
       fixedDateId,
       totalPeople,
-      paymentOption,
       addons,
     } = req.body;
 
@@ -103,7 +100,6 @@ const quoteBookingAdmin = async (req: Request, res: Response) => {
       packageId,
       fixedDateId,
       totalPeople,
-      paymentOption,
       addons,
     });
 
@@ -219,7 +215,6 @@ const createBooking = async (req: Request, res: Response) => {
       totalPeople,
       package: packageId,
       message,
-      paymentOption,
       addons,
       bookingId,
     } = req.body;
@@ -261,7 +256,6 @@ const createBooking = async (req: Request, res: Response) => {
         packageId,
         fixedDateId,
         totalPeople,
-        paymentOption,
         addons: addonSelections,
       });
     } catch (error) {
@@ -394,7 +388,6 @@ const createAdminQuote = async (req: Request, res: Response) => {
       totalPeople,
       package: packageId,
       message,
-      paymentOption,
       addons,
       dateMode,
       basePricePerPerson,
@@ -470,7 +463,6 @@ const createAdminQuote = async (req: Request, res: Response) => {
           packageId,
           fixedDateId,
           totalPeople,
-          paymentOption,
           addons: addonSelections,
         });
       } catch (error) {
@@ -498,7 +490,6 @@ const createAdminQuote = async (req: Request, res: Response) => {
           customEndDate: departureDate,
           basePricePerPerson: Number(basePricePerPerson) || 0,
           totalPeople,
-          paymentOption,
           addons: addonSelections,
         });
       } catch (error) {
@@ -1028,10 +1019,10 @@ const cancelBooking = async (req: Request, res: Response) => {
   }
 };
 
-const buildFinalSnapshotFromRequest = (
+const buildFinalSnapshotFromRequest = async (
   booking: BookingType,
   body: any
-): BookingPricingSnapshotPayload => {
+): Promise<BookingPricingSnapshotPayload> => {
   const totalPeople = Math.max(
     1,
     Math.floor(
@@ -1064,11 +1055,16 @@ const buildFinalSnapshotFromRequest = (
   return recalculateFromDraft({
     totalPeople,
     tripDays: Math.max(1, Math.floor(Number(tripDays) || 1)),
-    paymentOption: body.paymentOption || booking.pricing?.paymentOption || "full",
     basePricePerPerson: Number(body.basePricePerPerson),
     discountPercent: Number(body.discountPercent),
     currency: booking.currency || booking.pricing?.currency || "USD",
     addons: draftAddonsFromBody(body.addons),
+    ...(body.vatPercent !== undefined
+      ? { vatPercent: Number(body.vatPercent) }
+      : {}),
+    ...(body.transactionChargePercent !== undefined
+      ? { transactionChargePercent: Number(body.transactionChargePercent) }
+      : {}),
   });
 };
 
@@ -1084,7 +1080,7 @@ const previewFinalQuote = async (req: Request, res: Response) => {
       return res.status(404).json({ status: "fail", message: "Booking not found" });
     }
 
-    const snapshot = buildFinalSnapshotFromRequest(booking, req.body || {});
+    const snapshot = await buildFinalSnapshotFromRequest(booking, req.body || {});
     const packageName = (booking.package as any)?.name || "Package";
 
     return res.status(200).json({
@@ -1197,7 +1193,7 @@ const finalizeQuote = async (req: Request, res: Response) => {
       });
     }
 
-    const snapshot = buildFinalSnapshotFromRequest(booking, req.body || {});
+    const snapshot = await buildFinalSnapshotFromRequest(booking, req.body || {});
     const pkg = await Package.findById(booking.package).select("name");
     const packageName = (pkg as any)?.name || "Package";
     const publicView = toPublicView(snapshot, packageName);

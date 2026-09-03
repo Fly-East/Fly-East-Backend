@@ -50,12 +50,22 @@ export const finalQuoteEmailTemplate = (data: FinalQuoteEmailData): string => {
         : ""
     }
     <p style="font-size: 18px; margin-top: 20px;">
-      Total: <strong>$${publicView.totalAmount.toLocaleString()}</strong>
       ${
-        publicView.paymentOption === "partial"
-          ? `<br/><span style="font-size: 14px;">Due now: $${publicView.amountDueNow.toLocaleString()}</span>`
+        publicView.subtotal != null
+          ? `Subtotal: <strong>$${Number(publicView.subtotal).toLocaleString()}</strong><br/>`
           : ""
       }
+      ${
+        (publicView.vatAmount ?? 0) > 0
+          ? `VAT (${publicView.vatPercent ?? 0}%): <strong>$${Number(publicView.vatAmount).toLocaleString()}</strong><br/>`
+          : ""
+      }
+      ${
+        (publicView.transactionChargeAmount ?? 0) > 0
+          ? `Transaction charge (${publicView.transactionChargePercent ?? 0}%): <strong>$${Number(publicView.transactionChargeAmount).toLocaleString()}</strong><br/>`
+          : ""
+      }
+      Total: <strong>$${(publicView.grandTotal ?? publicView.totalAmount).toLocaleString()}</strong>
     </p>
     <p style="margin-top: 24px;">
       <a href="${quoteUrl}" style="display: inline-block; padding: 12px 24px; background: #059669; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600;">

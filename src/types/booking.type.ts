@@ -77,7 +77,13 @@ export type BookingPricingSnapshot = {
   extraParticipants: number;
   totalPeopleOnTrip: number;
   subtotal: number;
-  paymentOption: "full" | "partial";
+  vatPercent: number;
+  vatAmount: number;
+  transactionChargePercent: number;
+  transactionChargeAmount: number;
+  grandTotal: number;
+  /** @deprecated Always "full"; kept for older documents */
+  paymentOption?: "full";
   amountDueNow: number;
 };
 

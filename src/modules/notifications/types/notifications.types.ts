@@ -63,7 +63,9 @@ export interface PendingNotification {
 
 export interface NotificationEmailAttachment {
   filename: string;
-  content: Buffer;
+  /** Raw bytes, or base64 string when encoding is "base64" (required for BullMQ). */
+  content: Buffer | string;
+  encoding?: "base64";
   contentType?: string;
 }
 

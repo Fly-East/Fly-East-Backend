@@ -4,18 +4,71 @@ import {
   ChannelDeliveryResult,
   INotificationChannel,
 } from "./channel.interface";
-import { NotificationJobPayload } from "../types/notifications.types";
+import {
+  NotificationEmailAttachment,
+  NotificationJobPayload,
+} from "../types/notifications.types";
 import type { Attachment } from "nodemailer/lib/mailer";
+import logger from "../../../utils/logger";
+
+function reviveAttachmentContent(
+  attachment: NotificationEmailAttachment
+): Buffer | string | null {
+  const { content, encoding } = attachment;
+
+  if (encoding === "base64" && typeof content === "string") {
+    return Buffer.from(content, "base64");
+  }
+
+  if (Buffer.isBuffer(content)) {
+    return content;
+  }
+
+  if (content instanceof Uint8Array) {
+    return Buffer.from(content);
+  }
+
+  if (typeof content === "string") {
+    return content;
+  }
+
+  // BullMQ / JSON revive of Node Buffer
+  if (
+    content &&
+    typeof content === "object" &&
+    (content as { type?: string }).type === "Buffer" &&
+    Array.isArray((content as { data?: unknown }).data)
+  ) {
+    return Buffer.from((content as { data: number[] }).data);
+  }
+
+  return null;
+}
 
 const toEmailAttachments = (
   attachments?: NotificationJobPayload["attachments"]
 ): Attachment[] | undefined => {
   if (!attachments?.length) return undefined;
-  return attachments.map((attachment) => ({
-    filename: attachment.filename,
-    content: attachment.content,
-    contentType: attachment.contentType,
-  }));
+
+  const resolved: Attachment[] = [];
+
+  for (const attachment of attachments) {
+    const content = reviveAttachmentContent(attachment);
+    if (!content || (Buffer.isBuffer(content) && content.length === 0)) {
+      logger.warn(
+        `[notification-email] Skipping empty attachment: ${attachment.filename}`
+      );
+      continue;
+    }
+
+    resolved.push({
+      filename: attachment.filename,
+      content,
+      contentType: attachment.contentType,
+    });
+  }
+
+  return resolved.length > 0 ? resolved : undefined;
 };
 
 export class EmailChannelProvider implements INotificationChannel {
