@@ -687,15 +687,6 @@ export async function generateBookingInvoicePdf(
 
       const fixedAfter: SummaryRow[] = [];
       if (
-        data.participantSurcharge !== undefined &&
-        data.participantSurcharge > 0
-      ) {
-        fixedAfter.push({
-          label: "Participant surcharge",
-          value: money(data.participantSurcharge),
-        });
-      }
-      if (
         addonLines.length === 0 &&
         data.addonsTotal !== undefined &&
         data.addonsTotal > 0

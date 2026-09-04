@@ -1143,15 +1143,13 @@ const finalizeQuote = async (req: Request, res: Response) => {
     }
 
     if (booking.status === BookingStatus.CANCELLED) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        status: "fail",
-        message: "Cannot quote a cancelled booking",
-      });
-    }
-
-    if (
+      // Reopen so admin can send a fresh quote after traveler (or staff) cancel
+      booking.status = BookingStatus.PENDING;
+      booking.set("cancellationReason", undefined);
+      booking.set("cancelledAt", undefined);
+      booking.set("cancelledBy", undefined);
+      booking.seatsReserved = false;
+    } else if (
       booking.paymentStatus === PaymentStatus.PAID ||
       booking.paymentStatus === PaymentStatus.REFUNDED ||
       booking.status === BookingStatus.CONFIRMED ||

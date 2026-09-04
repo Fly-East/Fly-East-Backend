@@ -68,18 +68,15 @@ const validateQuantities = (input: {
   return { defaultQuantity, maxQuantity };
 };
 
-const assertPricingCompatibleWithAddon = (
+/** Counts-as-participant and charges-for-extras are mutually exclusive. */
+const assertParticipantRulesExclusive = (
   costsParticipants: boolean,
-  participantsPerQuantity: number,
-  pricingType: string
+  participantsPerQuantity: number
 ) => {
-  const hasParticipants = participantsPerQuantity > 0;
-
-  // blocked only when all three apply: costs participants, has participants, and perPerson
-  if (costsParticipants && hasParticipants && pricingType === "perPerson") {
+  if (costsParticipants && participantsPerQuantity > 0) {
     throw Object.assign(
       new Error(
-        "Addons that cost participants and define participants cannot use perPerson pricing"
+        "Choose either “counts as participant” or “charges for extra people”, not both"
       ),
       { statusCode: 400 }
     );
@@ -169,10 +166,9 @@ class PackageAddonsService {
     const resolvedAllowsQuantity = toBoolean(allowsQuantity);
     const resolvedCostsParticipants = toBoolean(costsParticipants);
 
-    assertPricingCompatibleWithAddon(
+    assertParticipantRulesExclusive(
       resolvedCostsParticipants,
-      addon.participantsPerQuantity ?? 0,
-      pricingType
+      addon.participantsPerQuantity ?? 0
     );
 
     const resolvedIsDefault = toBoolean(isDefault);
@@ -326,10 +322,9 @@ class PackageAddonsService {
     if (!catalogAddon) {
       throw Object.assign(new Error("Addon not found"), { statusCode: 404 });
     }
-    assertPricingCompatibleWithAddon(
+    assertParticipantRulesExclusive(
       resolvedCostsParticipants,
-      catalogAddon.participantsPerQuantity ?? 0,
-      resolvedPricingType
+      catalogAddon.participantsPerQuantity ?? 0
     );
 
     const resolvedIsDefault =

@@ -297,8 +297,9 @@ function defaultIncludedFormula(input: {
  * - perPerson + costsParticipants false → charge booked travelers only
  * - perPerson + costsParticipants true → charge travelers + extras
  *   introduced by participant add-ons
- * - Optional addons that introduce people AND have `costsParticipants`:
- *   also add a package-per-person surcharge for those people
+ * - Optional addons with `participantsPerQuantity > 0` add headcount only;
+ *   they are billed via their own addon price (never package pricePerPerson)
+ * - `participantsPerQuantity` and `costsParticipants` are mutually exclusive
  * - Default addons with `costsParticipants` : stay $0
  *   for booked travelers, then charge unitPrice × qty × extraPeople
  * - Defaults without the flag stay included / $0
@@ -318,7 +319,6 @@ export function calculateBookingTotal(
   const packageBase = pricePerPerson * totalPeople;
 
   let extraParticipants = 0;
-  let surchargeParticipants = 0;
 
   type Draft = {
     id: string;
@@ -345,11 +345,13 @@ export function calculateBookingTotal(
     const unitPrice = Math.max(0, Number(catalog.price) || 0);
     const pricingType = normalizePricingType(catalog.pricingType);
     const isDefault = toBool(catalog.isDefault);
-    const costsParticipants = toBool(catalog.costsParticipants);
     const participantsPerQuantity = Math.max(
       0,
       Number(catalog.participantsPerQuantity) || 0
     );
+    // Mutually exclusive with counts-as-participant (legacy may have both).
+    const costsParticipants =
+      toBool(catalog.costsParticipants) && participantsPerQuantity === 0;
 
     let lineTotal = 0;
     let formula = "Included in package";
@@ -376,12 +378,10 @@ export function calculateBookingTotal(
       formula = includedFormula;
     } else {
       // Only "Counts as a trip participant" (ppq > 0) adds headcount.
+      // Pricing stays on the addon line — never package pricePerPerson.
       if (participantsPerQuantity > 0) {
         extraPeopleFromLine = quantity * participantsPerQuantity;
         extraParticipants += extraPeopleFromLine;
-        if (costsParticipants) {
-          surchargeParticipants += extraPeopleFromLine;
-        }
       }
 
       // Non-perPerson optionals can be priced immediately (no extras dependency).
@@ -479,8 +479,9 @@ export function calculateBookingTotal(
     return { ...draft };
   });
 
-  const participantSurcharge = surchargeParticipants * pricePerPerson;
-  const subtotal = packageBase + addonsTotal + participantSurcharge;
+  // Kept at 0 for snapshot/schema compatibility — extras are addon-priced only.
+  const participantSurcharge = 0;
+  const subtotal = packageBase + addonsTotal;
   const vatAmount = round2(subtotal * (vatPercent / 100));
   const transactionChargeAmount = round2(
     (subtotal + vatAmount) * (transactionChargePercent / 100)

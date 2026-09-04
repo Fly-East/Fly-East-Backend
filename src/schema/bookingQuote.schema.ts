@@ -129,17 +129,30 @@ export type BookingLeadInput = z.infer<typeof bookingLeadSchema>;
 export type BookingCheckoutInput = z.infer<typeof bookingCheckoutSchema>;
 export type BookingAdminQuoteInput = z.infer<typeof bookingAdminQuoteSchema>;
 
-const finalQuoteAddonDraft = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1),
-  quantity: z.number().int().min(1),
-  unitPrice: z.number().min(0),
-  pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
-  isDefault: z.boolean().optional(),
-  allowsQuantity: z.boolean().optional(),
-  costsParticipants: z.boolean().optional(),
-  participantsPerQuantity: z.number().min(0).optional(),
-});
+const finalQuoteAddonDraft = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().min(1),
+    quantity: z.number().int().min(1),
+    unitPrice: z.number().min(0),
+    pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
+    isDefault: z.boolean().optional(),
+    allowsQuantity: z.boolean().optional(),
+    costsParticipants: z.boolean().optional(),
+    participantsPerQuantity: z.number().min(0).optional(),
+  })
+  .superRefine((line, ctx) => {
+    const countsAsParticipant =
+      Math.max(0, Number(line.participantsPerQuantity) || 0) > 0;
+    if (line.costsParticipants && countsAsParticipant) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Choose either “counts as participant” or “charges for extra people”, not both",
+        path: ["costsParticipants"],
+      });
+    }
+  });
 
 export const bookingFinalQuoteSchema = z.object({
   body: z.object({
