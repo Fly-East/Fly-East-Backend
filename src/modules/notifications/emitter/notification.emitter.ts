@@ -3,15 +3,25 @@ import { MessageType } from "../constants/messageType.constants";
 import { NotificationContext } from "../types/notifications.types";
 import { NotificationService } from "../service/notification.service";
 
+const withRequestIp = (
+  context: NotificationContext
+): NotificationContext => {
+  if (context.ip) return context;
+  const store = notificationStore.getStore();
+  if (!store?.requestIp) return context;
+  return { ...context, ip: store.requestIp };
+};
+
 export const emitNotification = (
   messageType: MessageType,
   context: NotificationContext
 ): void => {
-  const queue = notificationStore.getStore();
-  if (queue) {
-    queue.push({ messageType, context });
+  const enriched = withRequestIp(context);
+  const store = notificationStore.getStore();
+  if (store) {
+    store.queue.push({ messageType, context: enriched });
     return;
   }
 
-  void NotificationService.dispatch(messageType, context);
+  void NotificationService.dispatch(messageType, enriched);
 };

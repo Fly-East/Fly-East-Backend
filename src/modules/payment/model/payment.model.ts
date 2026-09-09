@@ -51,6 +51,13 @@ const PaymentSchema = new Schema<PaymentDocument>(
       type: Schema.Types.Mixed,
       default: {},
     },
+    clientIp: {
+      type: String,
+      trim: true,
+    },
+    ipMeta: {
+      type: Schema.Types.Mixed,
+    },
     initiatedAt: {
       type: Date,
       default: Date.now,
