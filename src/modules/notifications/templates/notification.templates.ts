@@ -116,6 +116,7 @@ export const buildNotificationContent = (
   const subjectMap: Record<MessageType, string> = {
     [MESSAGE_TYPES.NEW_INQUIRY]: "New Inquiry",
     [MESSAGE_TYPES.NEW_CONTACT_LEAD]: "New Contact Lead",
+    [MESSAGE_TYPES.NEW_LEAD]: "New Lead",
     [MESSAGE_TYPES.NEW_BOOKING]: "New Booking",
     [MESSAGE_TYPES.PAYMENT_RECEIVED]: "Payment Received",
     [MESSAGE_TYPES.QUOTE_FINALIZED]: "Quote Finalized",
@@ -134,6 +135,8 @@ export const buildNotificationContent = (
       "You have received a new package inquiry.",
     [MESSAGE_TYPES.NEW_CONTACT_LEAD]:
       "You have received a new contact form submission.",
+    [MESSAGE_TYPES.NEW_LEAD]:
+      "A customer has started a booking (new lead).",
     [MESSAGE_TYPES.NEW_BOOKING]: "A new booking has been created.",
     [MESSAGE_TYPES.PAYMENT_RECEIVED]:
       "A booking payment has been received.",

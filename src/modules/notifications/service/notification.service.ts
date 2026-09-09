@@ -2,6 +2,11 @@ import { Types } from "mongoose";
 import { ADMIN_EMAIL, SUPPORT_EMAIL } from "../../../configs/env";
 import logger from "../../../utils/logger";
 import {
+  lookupIpGeo,
+  toNotificationIpFields,
+  type IpGeoResult,
+} from "../../../utils/ipGeo";
+import {
   isCustomerMessageType,
   MESSAGE_TYPE_DEFINITIONS,
   MESSAGE_TYPES,
@@ -24,6 +29,51 @@ import {
   NotificationJobPayload,
   PendingNotification,
 } from "../types/notifications.types";
+
+const IP_CONTEXT_KEYS = [
+  "ip",
+  "ipMeta",
+  "ipCountry",
+  "ipCity",
+  "ipRegion",
+  "ipIsp",
+  "ipTimezone",
+  "ipOrg",
+] as const;
+
+const stripIpFromContext = (
+  context: Record<string, unknown>
+): Record<string, unknown> => {
+  const next = { ...context };
+  for (const key of IP_CONTEXT_KEYS) {
+    delete next[key];
+  }
+  return next;
+};
+
+const enrichContextWithIpMeta = async (
+  context: Record<string, unknown>
+): Promise<Record<string, unknown>> => {
+  const ip = typeof context.ip === "string" ? context.ip : undefined;
+  if (!ip) return context;
+
+  if (context.ipMeta && typeof context.ipMeta === "object") {
+    if (context.ipCountry) return context;
+    return {
+      ...context,
+      ...toNotificationIpFields(context.ipMeta as IpGeoResult),
+    };
+  }
+
+  if (context.ipCountry) return context;
+
+  const geo = await lookupIpGeo(ip);
+  return {
+    ...context,
+    ipMeta: geo,
+    ...toNotificationIpFields(geo),
+  };
+};
 
 const channelRecipient = (
   contact: Pick<IContactPerson, "email" | "phoneNumber">,
@@ -179,6 +229,8 @@ export class NotificationService {
       return;
     }
 
+    const enrichedContext = await enrichContextWithIpMeta(context);
+
     const typeConfig = await MessageTypeConfig.findOne({ messageType }).lean();
     const definition = getTypeDefinition(messageType);
     const audience = typeConfig?.audience ?? definition?.audience ?? "internal";
@@ -188,7 +240,13 @@ export class NotificationService {
     }
 
     if (isCustomerMessageType(audience)) {
-      await this.dispatchCustomer(messageType, context, typeConfig, definition);
+      await this.dispatchCustomer(
+        messageType,
+        stripIpFromContext(enrichedContext),
+        typeConfig,
+        definition,
+        enrichedContext
+      );
       return;
     }
 
@@ -198,7 +256,7 @@ export class NotificationService {
     }).lean();
 
     if (subscriptions.length === 0) {
-      await enqueueEnvFallback(messageType, context);
+      await enqueueEnvFallback(messageType, enrichedContext);
       return;
     }
 
@@ -223,10 +281,10 @@ export class NotificationService {
         subscription,
         contact,
         messageType,
-        context,
-        channel
+        enrichedContext,
+        channel,
+        false
       );
-
       if (job) {
         jobs.push(job);
         await NotificationLog.create({
@@ -235,13 +293,13 @@ export class NotificationService {
           contactPersonId: new Types.ObjectId(contact._id),
           recipient: job.to,
           status: "queued",
-          context,
+          context: enrichedContext,
         });
       }
     }
 
     if (jobs.length === 0) {
-      await enqueueEnvFallback(messageType, context);
+      await enqueueEnvFallback(messageType, enrichedContext);
       return;
     }
 
@@ -255,7 +313,8 @@ export class NotificationService {
       IMessageTypeConfig,
       "primaryChannel" | "fallbackChannel" | "isEnabled"
     > | null,
-    definition = getTypeDefinition(messageType)
+    definition = getTypeDefinition(messageType),
+    logContext?: Record<string, unknown>
   ): Promise<void> {
     const primaryChannel =
       typeConfig?.primaryChannel ??
@@ -311,7 +370,7 @@ export class NotificationService {
       channel: resolved.channel,
       recipient: resolved.recipient,
       status: "queued",
-      context,
+      context: logContext ?? context,
     });
   }
 

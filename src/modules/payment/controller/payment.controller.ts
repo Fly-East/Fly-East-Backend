@@ -4,6 +4,7 @@ import Booking from "../../../models/booking.model";
 import { QuoteStatus } from "../../../types/booking.type";
 import * as paymentService from "../service/payment.service";
 import logger from "../../../utils/logger";
+import { getClientIp } from "../../../utils/clientIp";
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/payment/initiate
@@ -66,7 +67,8 @@ export async function initiatePaymentHandler(
 
     const paymentPageURL = await paymentService.initiatePayment(
       booking as Parameters<typeof paymentService.initiatePayment>[0],
-      provider
+      provider,
+      getClientIp(req)
     );
 
     res.status(200).json({

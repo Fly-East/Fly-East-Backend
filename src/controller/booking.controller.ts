@@ -281,6 +281,7 @@ const createBooking = async (req: Request, res: Response) => {
     };
 
     let booking: BookingType | null = null;
+    let isNewLead = false;
 
     if (bookingId && Types.ObjectId.isValid(bookingId)) {
       const existing = await Booking.findById(bookingId);
@@ -324,10 +325,25 @@ const createBooking = async (req: Request, res: Response) => {
         ...(arrivalDate ? { arrivalDate: new Date(arrivalDate) } : {}),
         ...(departureDate ? { departureDate: new Date(departureDate) } : {}),
       });
+      isNewLead = true;
     }
 
     await clearCacheByPrefix("bookings:");
     await clearCacheByPrefix("");
+
+    if (isNewLead && booking) {
+      emitNotification(MESSAGE_TYPES.NEW_LEAD, {
+        bookingId: booking._id?.toString(),
+        bookingReference: booking.bookingReference,
+        packageName: quote.publicView.covers.packageName,
+        customerName: booking.personalInfo?.[0]?.fullName,
+        customerEmail: booking.personalInfo?.[0]?.email,
+        totalAmount: booking.totalAmount,
+        currency: booking.currency,
+        totalPeople: booking.totalPeople,
+        stage: booking.stage,
+      });
+    }
 
     return res.status(201).json({
       status: "success",
