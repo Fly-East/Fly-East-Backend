@@ -106,12 +106,11 @@ class AddonsService {
       const conflictingOffer = await PackageAddon.findOne({
         addon: addonId,
         costsParticipants: true,
-        pricingType: "perPerson",
       });
       if (conflictingOffer) {
         throw Object.assign(
           new Error(
-            "Cannot set participants while package offers cost participants and use perPerson pricing. Change those offers first."
+            "Cannot set participants while package offers charge for extra people. Turn that off on those offers first — the two rules are either/or."
           ),
           { statusCode: 400 }
         );

@@ -70,10 +70,21 @@ const PricingSnapshotSchema = new Schema(
     extraParticipants: { type: Number, required: true, min: 0 },
     totalPeopleOnTrip: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },
+    vatPercent: { type: Number, required: true, min: 0, max: 100, default: 0 },
+    vatAmount: { type: Number, required: true, min: 0, default: 0 },
+    transactionChargePercent: {
+      type: Number,
+      required: true,
+      min: 0,
+      max: 100,
+      default: 0,
+    },
+    transactionChargeAmount: { type: Number, required: true, min: 0, default: 0 },
+    grandTotal: { type: Number, required: true, min: 0, default: 0 },
     paymentOption: {
       type: String,
       enum: ["full", "partial"],
-      required: true,
+      required: false,
       default: "full",
     },
     amountDueNow: { type: Number, required: true, min: 0 },
@@ -137,6 +148,10 @@ const BookingSchema = new Schema<BookingType>(
     },
     quoteTokenExpiresAt: {
       type: Date,
+    },
+    quotePublicUrl: {
+      type: String,
+      trim: true,
     },
     seatsReserved: {
       type: Boolean,

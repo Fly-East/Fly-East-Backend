@@ -77,7 +77,13 @@ export type BookingPricingSnapshot = {
   extraParticipants: number;
   totalPeopleOnTrip: number;
   subtotal: number;
-  paymentOption: "full" | "partial";
+  vatPercent: number;
+  vatAmount: number;
+  transactionChargePercent: number;
+  transactionChargeAmount: number;
+  grandTotal: number;
+  /** @deprecated Always "full"; kept for older documents */
+  paymentOption?: "full";
   amountDueNow: number;
 };
 
@@ -118,6 +124,8 @@ export interface BookingType extends Document {
   finalizedBy?: Types.ObjectId;
   quoteTokenHash?: string;
   quoteTokenExpiresAt?: Date;
+  /** Full public quote URL (includes token) for traveler notifications */
+  quotePublicUrl?: string;
   seatsReserved?: boolean;
   seen: boolean;
   /** True after payment invoice email was queued to the traveller */

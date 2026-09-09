@@ -19,7 +19,7 @@ import {
 } from "../utils/redis";
 import AppError from "../utils/appError";
 import logger from "../utils/logger";
-import { sendInquiryNotification } from "../service/inquiryEmail.service";
+import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -36,11 +36,16 @@ export async function createInquiryHandler(
     const inquery = await createInquiry(body);
     await clearCacheByPrefix("inquiries:");
     await clearCacheByPrefix("");
-    try {
-      await sendInquiryNotification(inquery);
-    } catch (emailError) {
-      logger.error("Failed to send inquiry notification email", emailError);
-    }
+    emitNotification(MESSAGE_TYPES.NEW_INQUIRY, {
+      inquiryId: inquery._id?.toString(),
+      name: inquery.name,
+      email: inquery.email,
+      phone: inquery.phone,
+      message: inquery.message,
+      source: inquery.source,
+      packageId: inquery.package?.toString(),
+      createdAt: inquery.createdAt,
+    });
     return res.json({
       status: "success",
       msg: "Create success",

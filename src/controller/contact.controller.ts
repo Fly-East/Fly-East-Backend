@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import Contact from "../models/contact.model";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
+import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -59,6 +60,19 @@ export const createContact = async (req: Request, res: Response) => {
     // Invalidate all contact cache
     await clearCacheByPrefix("contacts:");
     await clearCacheByPrefix("");
+
+    emitNotification(MESSAGE_TYPES.NEW_CONTACT_LEAD, {
+      contactId: newContact._id?.toString(),
+      name: newContact.name,
+      email: newContact.email,
+      phone: newContact.number,
+      company: newContact.company,
+      message: newContact.message,
+      source: newContact.source,
+      travelDate: newContact.travelDate,
+      createdAt: newContact.createdAt,
+    });
+
     return res.status(201).json({
       status: "success",
       message: "Contact form submitted successfully",

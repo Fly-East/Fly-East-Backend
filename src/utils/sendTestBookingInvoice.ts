@@ -9,7 +9,8 @@ import logger from "./logger";
  */
 export async function sendTestInvoiceForPaidBookings(
   email: string,
-  limit?: number
+  limit?: number,
+  options: { includeBreakdown?: boolean } = {}
 ): Promise<void> {
   const take = Math.max(1, limit ?? 1);
 
@@ -34,6 +35,7 @@ export async function sendTestInvoiceForPaidBookings(
     const result = await sendBookingInvoice(booking._id.toString(), {
       force: true,
       to: email,
+      includeBreakdown: Boolean(options.includeBreakdown),
     });
     logger.info(
       `[test-invoice] ${booking.bookingReference}: sent=${result.sent}` +

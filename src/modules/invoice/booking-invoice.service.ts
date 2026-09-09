@@ -1,23 +1,37 @@
 import Booking from "../../models/booking.model";
-import DetailedItinerary from "../../models/detailedItinerary.model";
-import { sendEmail } from "../email";
-import {
-  bookingInvoiceTemplate,
-  bookingInvoiceText,
-  type BookingInvoiceData,
-} from "../../mailtemplate/bookingInvoice";
 import { formatDate } from "../../mailtemplate/utils";
-import logger from "../../utils/logger";
-import { downloadCloudinaryAsset } from "../../utils/cloudinary";
 import { PaymentStatus } from "../../types/booking.type";
-import { generateBookingInvoicePdf } from "./invoice-pdf";
-import type { Attachment } from "nodemailer/lib/mailer";
+import type {
+  BookingInvoiceAddonLine,
+  BookingInvoiceData,
+} from "../../mailtemplate/bookingInvoice";
+import logger from "../../utils/logger";
+import { MESSAGE_TYPES } from "../notifications/constants/messageType.constants";
+import { NotificationService } from "../notifications/service/notification.service";
 
 export type SendBookingInvoiceOptions = {
   /** Resend even if invoiceSent is already true */
   force?: boolean;
   /** Override recipient (e.g. for local testing) */
   to?: string;
+  /**
+   * When true, PDF includes full pricing breakdown (package, addons, fees).
+   * Default false: only lists what is included on the trip + total.
+   */
+  includeBreakdown?: boolean;
+};
+
+export type BuildBookingInvoiceOptions = {
+  includeBreakdown?: boolean;
+};
+
+type AddonSnapshotLike = {
+  name?: string;
+  quantity?: number;
+  unitPrice?: number;
+  lineTotal?: number;
+  isDefault?: boolean;
+  formula?: string;
 };
 
 function isValidEmail(email: string): boolean {
@@ -50,50 +64,98 @@ function resolveDuration(
   return undefined;
 }
 
-export function buildBookingInvoiceData(booking: {
-  bookingReference: string;
-  paymentStatus?: string;
-  status?: string;
-  totalAmount?: number;
-  currency?: string;
-  totalPeople?: number;
-  arrivalDate?: Date | string | null;
-  departureDate?: Date | string | null;
-  personalInfo?: Array<{
-    fullName?: string;
-    email?: string;
-    phoneNumber?: string;
-    country?: string;
-  }>;
-  billingAddress?: {
-    company?: string;
-    street?: string;
-    city?: string;
-    state?: string;
-    postalCode?: string;
-    country?: string;
-  } | null;
-  finalPricing?: {
-    tripDays?: number;
+function mapAddonLines(
+  addons: AddonSnapshotLike[] | undefined
+): BookingInvoiceAddonLine[] {
+  if (!Array.isArray(addons)) return [];
+  return addons
+    .filter((line) => line?.name)
+    .map((line) => ({
+      name: String(line.name),
+      quantity: Math.max(1, Number(line.quantity) || 1),
+      lineTotal: Math.max(0, Number(line.lineTotal) || 0),
+      isDefault: Boolean(line.isDefault),
+      unitPrice:
+        line.unitPrice !== undefined
+          ? Math.max(0, Number(line.unitPrice) || 0)
+          : undefined,
+      formula: line.formula,
+    }));
+}
+
+export function buildBookingInvoiceData(
+  booking: {
+    bookingReference: string;
+    paymentStatus?: string;
+    status?: string;
+    totalAmount?: number;
+    currency?: string;
     totalPeople?: number;
-    basePricePerPerson?: number;
-    discountPercent?: number;
-    packageBase?: number;
-    subtotal?: number;
-    amountDueNow?: number;
-  } | null;
-  pricing?: {
-    tripDays?: number;
-    totalPeople?: number;
-    basePricePerPerson?: number;
-    discountPercent?: number;
-    packageBase?: number;
-    subtotal?: number;
-    amountDueNow?: number;
-  } | null;
-  package?: { name?: string; duration?: unknown } | string | null;
-}): BookingInvoiceData {
+    arrivalDate?: Date | string | null;
+    departureDate?: Date | string | null;
+    personalInfo?: Array<{
+      fullName?: string;
+      email?: string;
+      phoneNumber?: string;
+      country?: string;
+    }>;
+    billingAddress?: {
+      company?: string;
+      street?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+      country?: string;
+    } | null;
+    finalPricing?: {
+      tripDays?: number;
+      totalPeople?: number;
+      basePricePerPerson?: number;
+      discountPercent?: number;
+      packageBase?: number;
+      addonsTotal?: number;
+      participantSurcharge?: number;
+      subtotal?: number;
+      vatPercent?: number;
+      vatAmount?: number;
+      transactionChargePercent?: number;
+      transactionChargeAmount?: number;
+      grandTotal?: number;
+      amountDueNow?: number;
+    } | null;
+    pricing?: {
+      tripDays?: number;
+      totalPeople?: number;
+      basePricePerPerson?: number;
+      discountPercent?: number;
+      packageBase?: number;
+      addonsTotal?: number;
+      participantSurcharge?: number;
+      subtotal?: number;
+      vatPercent?: number;
+      vatAmount?: number;
+      transactionChargePercent?: number;
+      transactionChargeAmount?: number;
+      grandTotal?: number;
+      amountDueNow?: number;
+    } | null;
+    finalSelectedAddons?: AddonSnapshotLike[];
+    selectedAddons?: AddonSnapshotLike[];
+    package?: {
+      name?: string;
+      duration?: unknown;
+      inclusion?: Array<{ title?: string; description?: string } | string>;
+    } | string | null;
+  },
+  options: BuildBookingInvoiceOptions = {}
+): BookingInvoiceData {
+  const includeBreakdown = Boolean(options.includeBreakdown);
   const pricing = booking.finalPricing ?? booking.pricing;
+  const addonSource =
+    booking.finalSelectedAddons?.length
+      ? booking.finalSelectedAddons
+      : booking.selectedAddons;
+  const addonLines = mapAddonLines(addonSource);
   const primary = booking.personalInfo?.[0];
   const billing = booking.billingAddress;
   const packageName =
@@ -105,25 +167,75 @@ export function buildBookingInvoiceData(booking: {
       ? booking.package.duration
       : undefined;
 
+  const packageBase = pricing?.packageBase;
   const originalTotal =
-    pricing?.packageBase ??
-    pricing?.subtotal ??
+    packageBase ?? pricing?.subtotal ?? booking.totalAmount ?? 0;
+  const subtotal = pricing?.subtotal ?? originalTotal;
+  const vatPercent = pricing?.vatPercent ?? 0;
+  const vatAmount = pricing?.vatAmount ?? 0;
+  const transactionChargePercent = pricing?.transactionChargePercent ?? 0;
+  const transactionChargeAmount = pricing?.transactionChargeAmount ?? 0;
+  const totalAmount =
+    pricing?.grandTotal ??
+    pricing?.amountDueNow ??
+    subtotal ??
     booking.totalAmount ??
     0;
-  const totalAmount =
-    pricing?.amountDueNow ?? pricing?.subtotal ?? booking.totalAmount ?? 0;
   const discountPercentage = pricing?.discountPercent ?? 0;
   const discountAmount =
-    discountPercentage > 0
-      ? Math.max(0, Math.round((originalTotal - totalAmount) * 100) / 100)
+    discountPercentage > 0 && packageBase != null
+      ? Math.max(
+          0,
+          Math.round((packageBase - (pricing?.subtotal ?? packageBase)) * 100) /
+            100
+        )
       : 0;
 
   const today = formatDate(new Date());
   const paid = booking.paymentStatus === PaymentStatus.PAID;
 
+  const packageInclusions =
+    booking.package &&
+    typeof booking.package === "object" &&
+    Array.isArray(booking.package.inclusion)
+      ? booking.package.inclusion
+          .map((item) => {
+            if (!item) return null;
+            if (typeof item === "string") {
+              const name = item.trim();
+              return name ? { name, quantity: 1, isDefault: true } : null;
+            }
+            const name = (item.title || item.description || "").trim();
+            return name ? { name, quantity: 1, isDefault: true } : null;
+          })
+          .filter(
+            (row): row is { name: string; quantity: number; isDefault: true } =>
+              Boolean(row)
+          )
+      : [];
+
+  const selectedAddonInclusions = addonLines
+    .filter((line) => !line.isDefault)
+    .map((line) => ({
+      name: line.name,
+      quantity: line.quantity,
+      isDefault: false,
+    }));
+
+  // Prefer package inclusion copy; fall back to booking addon lines.
+  const includedOnTrip =
+    packageInclusions.length > 0
+      ? [...packageInclusions, ...selectedAddonInclusions]
+      : addonLines.map((line) => ({
+          name: line.name,
+          quantity: line.quantity,
+          isDefault: line.isDefault,
+        }));
+
   return {
     bookingReference: booking.bookingReference,
     invoiceNumber: booking.bookingReference,
+    includeBreakdown,
     primaryContact: primary
       ? {
           fullName: primary.fullName,
@@ -143,7 +255,6 @@ export function buildBookingInvoiceData(booking: {
         }
       : undefined,
     invoiceDate: today,
-    // Only show due date for unpaid invoices
     dueDate: paid ? undefined : today,
     startDate: formatDate(booking.arrivalDate ?? undefined),
     endDate: formatDate(booking.departureDate ?? undefined),
@@ -155,10 +266,24 @@ export function buildBookingInvoiceData(booking: {
       packageDuration
     ),
     totalPeople: pricing?.totalPeople ?? booking.totalPeople,
-    basePricePerPerson: pricing?.basePricePerPerson,
-    originalTotal,
-    discountPercentage: discountPercentage || undefined,
-    discountAmount: discountAmount || undefined,
+    includedOnTrip,
+    ...(includeBreakdown
+      ? {
+          addonLines,
+          basePricePerPerson: pricing?.basePricePerPerson,
+          packageBase,
+          addonsTotal: pricing?.addonsTotal,
+          participantSurcharge: pricing?.participantSurcharge,
+          originalTotal,
+          discountPercentage: discountPercentage || undefined,
+          discountAmount: discountAmount || undefined,
+          subtotal,
+          vatPercent: vatPercent || undefined,
+          vatAmount: vatAmount || undefined,
+          transactionChargePercent: transactionChargePercent || undefined,
+          transactionChargeAmount: transactionChargeAmount || undefined,
+        }
+      : {}),
     totalAmount,
     status: paid
       ? "PAID"
@@ -166,65 +291,21 @@ export function buildBookingInvoiceData(booking: {
   };
 }
 
-function sanitizeFilenamePart(name: string): string {
-  return name
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
-    .replace(/\s+/g, " ")
-    .slice(0, 120);
-}
-
 /**
- * If a detailed itinerary PDF exists for the package, download it for attachment.
- * Failures are logged and ignored so the invoice email still sends.
- */
-async function fetchPackageItineraryAttachment(
-  packageId: string | undefined,
-  packageName?: string
-): Promise<Attachment | null> {
-  if (!packageId) return null;
-
-  try {
-    const detail = await DetailedItinerary.findOne({ package: packageId })
-      .select("pdf")
-      .lean();
-
-    if (!detail?.pdf?.url || !detail.pdf.publicId) {
-      logger.info(
-        `[invoice] No detailed itinerary PDF on file for package ${packageId}`
-      );
-      return null;
-    }
-
-    const content = await downloadCloudinaryAsset({
-      url: detail.pdf.url,
-      publicId: detail.pdf.publicId,
-      resourceType: detail.pdf.resourceType,
-    });
-
-    const safeName = sanitizeFilenamePart(packageName || "Package");
-    return {
-      filename: `${safeName}-detailed-Itinerary.pdf`,
-      content,
-      contentType: detail.pdf.mimeType || "application/pdf",
-    };
-  } catch (err) {
-    logger.warn(
-      `[invoice] Could not attach detailed itinerary for package ${packageId}: ${err}`
-    );
-    return null;
-  }
-}
-
-/**
- * Generates a booking invoice email and queues it to the primary traveller.
+ * Queues a payment confirmation (invoice/receipt) to the primary traveller
+ * via the configurable customer notification system.
  */
 export async function sendBookingInvoice(
   bookingId: string,
   options: SendBookingInvoiceOptions = {}
 ): Promise<{ sent: boolean; to?: string; reason?: string }> {
+  const includeBreakdown = Boolean(options.includeBreakdown);
   const booking = await Booking.findById(bookingId)
-    .populate("package", "name duration")
+    .populate({
+      path: "package",
+      select: "name duration inclusion",
+      populate: { path: "inclusion", select: "title description" },
+    })
     .lean();
 
   if (!booking) {
@@ -247,48 +328,13 @@ export async function sendBookingInvoice(
     return { sent: false, reason: "missing_email" };
   }
 
-  const invoiceData = buildBookingInvoiceData(booking as Parameters<
-    typeof buildBookingInvoiceData
-  >[0]);
-  const text = bookingInvoiceText(invoiceData);
-  const html = bookingInvoiceTemplate(invoiceData);
-  const pdfBuffer = await generateBookingInvoicePdf(invoiceData);
-  const paid = invoiceData.status === "PAID";
-
-  const packageId =
-    booking.package && typeof booking.package === "object" && "_id" in booking.package
-      ? String((booking.package as { _id: unknown })._id)
-      : booking.package
-        ? String(booking.package)
-        : undefined;
-
-  const attachments: Attachment[] = [
-    {
-      filename: `FlyEast-Invoice-${booking.bookingReference}.pdf`,
-      content: pdfBuffer,
-      contentType: "application/pdf",
-    },
-  ];
-
-  const itineraryAttachment = await fetchPackageItineraryAttachment(
-    packageId,
-    invoiceData.packageName
-  );
-  if (itineraryAttachment) {
-    attachments.push(itineraryAttachment);
-    logger.info(
-      `[invoice] Attached detailed itinerary PDF for booking ${booking.bookingReference}`
-    );
-  }
-
-  await sendEmail({
-    to,
-    subject: paid
-      ? `Payment receipt ${booking.bookingReference} — FlyEast Nepal`
-      : `Invoice ${booking.bookingReference} — FlyEast Nepal`,
-    html,
-    text,
-    attachments,
+  await NotificationService.dispatch(MESSAGE_TYPES.PAYMENT_CONFIRMATION, {
+    bookingId,
+    customerEmail: to,
+    customerPhone: primary?.phoneNumber,
+    customerName: primary?.fullName,
+    force: options.force,
+    includeBreakdown,
   });
 
   await Booking.findByIdAndUpdate(bookingId, {
@@ -299,7 +345,8 @@ export async function sendBookingInvoice(
   });
 
   logger.info(
-    `[invoice] Queued invoice for booking ${booking.bookingReference} → ${to}`
+    `[invoice] Queued payment confirmation for booking ${booking.bookingReference} → ${to}` +
+      ` breakdown=${includeBreakdown}`
   );
 
   return { sent: true, to };

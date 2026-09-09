@@ -12,7 +12,6 @@ const quoteBody = z.object({
     .number({ required_error: "totalPeople is required" })
     .int()
     .min(1),
-  paymentOption: z.enum(["full", "partial"]).optional().default("full"),
   addons: z.array(addonSelection).optional().default([]),
 });
 
@@ -48,7 +47,6 @@ export const bookingLeadSchema = z.object({
 export const bookingCheckoutSchema = z.object({
   body: z
     .object({
-      paymentOption: z.enum(["full", "partial"]).optional(),
       totalPeople: z.number().int().min(1).optional(),
       addons: z.array(addonSelection).optional(),
       fixedDateId: z.string().optional(),
@@ -83,7 +81,6 @@ export const bookingAdminQuoteSchema = z.object({
         .number({ required_error: "totalPeople is required" })
         .int()
         .min(1),
-      paymentOption: z.enum(["full", "partial"]).optional().default("full"),
       addons: z.array(addonSelection).optional().default([]),
       personalInfo: z.union([
         personalInfoSchema,
@@ -132,23 +129,35 @@ export type BookingLeadInput = z.infer<typeof bookingLeadSchema>;
 export type BookingCheckoutInput = z.infer<typeof bookingCheckoutSchema>;
 export type BookingAdminQuoteInput = z.infer<typeof bookingAdminQuoteSchema>;
 
-const finalQuoteAddonDraft = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1),
-  quantity: z.number().int().min(1),
-  unitPrice: z.number().min(0),
-  pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
-  isDefault: z.boolean().optional(),
-  allowsQuantity: z.boolean().optional(),
-  costsParticipants: z.boolean().optional(),
-  participantsPerQuantity: z.number().min(0).optional(),
-});
+const finalQuoteAddonDraft = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().min(1),
+    quantity: z.number().int().min(1),
+    unitPrice: z.number().min(0),
+    pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
+    isDefault: z.boolean().optional(),
+    allowsQuantity: z.boolean().optional(),
+    costsParticipants: z.boolean().optional(),
+    participantsPerQuantity: z.number().min(0).optional(),
+  })
+  .superRefine((line, ctx) => {
+    const countsAsParticipant =
+      Math.max(0, Number(line.participantsPerQuantity) || 0) > 0;
+    if (line.costsParticipants && countsAsParticipant) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Choose either “counts as participant” or “charges for extra people”, not both",
+        path: ["costsParticipants"],
+      });
+    }
+  });
 
 export const bookingFinalQuoteSchema = z.object({
   body: z.object({
     basePricePerPerson: z.number().min(0),
     discountPercent: z.number().min(0).max(100),
-    paymentOption: z.enum(["full", "partial"]).optional().default("full"),
     totalPeople: z.number().int().min(1).optional(),
     tripDays: z.number().int().min(1).optional(),
     arrivalDate: z.string().optional().nullable(),
@@ -156,6 +165,10 @@ export const bookingFinalQuoteSchema = z.object({
     /** When true, drop fixedDate so no seats are reserved */
     useCustomDates: z.boolean().optional(),
     addons: z.array(finalQuoteAddonDraft).optional().default([]),
+    /** Optional override of global VAT % for this quote */
+    vatPercent: z.number().min(0).max(100).optional(),
+    /** Optional override of global transaction charge % for this quote */
+    transactionChargePercent: z.number().min(0).max(100).optional(),
   }),
   params: z.object({
     id: z.string().min(1),
@@ -166,6 +179,18 @@ export const publicQuoteTokenSchema = z.object({
   params: z.object({
     token: z.string().min(16),
   }),
+});
+
+export const publicQuoteCancelSchema = z.object({
+  params: z.object({
+    token: z.string().min(16),
+  }),
+  body: z
+    .object({
+      reason: z.string().max(500).optional(),
+    })
+    .optional()
+    .default({}),
 });
 
 export type BookingFinalQuoteInput = z.infer<typeof bookingFinalQuoteSchema>;

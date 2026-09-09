@@ -10,6 +10,7 @@ const {
   previewFinalQuote,
   finalizeQuote,
   getPublicQuote,
+  cancelQuoteByToken,
   getAllBookings,
   getBookingById,
   updateBookingStatus,
@@ -26,6 +27,7 @@ import {
   bookingCheckoutSchema,
   bookingFinalQuoteSchema,
   publicQuoteTokenSchema,
+  publicQuoteCancelSchema,
 } from "../schema/bookingQuote.schema";
 
 const router = Router();
@@ -79,6 +81,12 @@ router.get(
   "/api/v1/quote/:token",
   validate(publicQuoteTokenSchema),
   getPublicQuote
+);
+
+router.post(
+  "/api/v1/quote/:token/cancel",
+  validate(publicQuoteCancelSchema),
+  cancelQuoteByToken
 );
 
 router.get("/api/v1/booking", isAdmin, getAllBookings);

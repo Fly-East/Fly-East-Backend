@@ -9,6 +9,10 @@ import {
 import { getEmailConfig, getEmailTransporter } from "../modules/email";
 import type { EmailConfig } from "../modules/email/email.config";
 import { renderMailTemplate } from "../mailtemplate";
+import {
+  MESSAGE_TYPES,
+  NotificationService,
+} from "../modules/notifications";
 
 const resolveAttachments = (attachments?: EmailJob["attachments"]) =>
   attachments?.map((attachment) => {
@@ -91,6 +95,15 @@ export class EmailWorker {
         }`,
         { stack: err?.stack }
       );
+
+      void NotificationService.dispatch(MESSAGE_TYPES.SYSTEM_ERROR, {
+        source: "worker",
+        worker: "email-queue",
+        jobId,
+        recipient,
+        message: err?.message ?? "Email job failed",
+        stack: err?.stack,
+      });
     });
   }
 }
