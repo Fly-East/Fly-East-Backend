@@ -196,7 +196,8 @@ const corsOptions: CorsOptions = {
       logger.warn(`CORS blocked for origin: ${origin}`);
     }
 
-    callback(new Error("Not allowed by CORS"));
+    // Deny without throwing — avoids 500 / SYSTEM_ERROR notifications from scanners
+    callback(null, false);
   },
   credentials: true,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
@@ -267,7 +268,7 @@ const io = new Server(server, {
         logger.warn(`Socket.IO CORS blocked for origin: ${origin}`);
       }
 
-      callback(new Error("Socket.IO CORS blocked"));
+      callback(null, false);
     },
     methods: ["GET", "POST", "OPTIONS"],
     credentials: true,

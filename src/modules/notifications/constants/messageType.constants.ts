@@ -1,6 +1,7 @@
 export const MESSAGE_TYPES = {
   NEW_INQUIRY: "new_inquiry",
   NEW_CONTACT_LEAD: "new_contact_lead",
+  NEW_LEAD: "new_lead",
   NEW_BOOKING: "new_booking",
   PAYMENT_RECEIVED: "payment_received",
   QUOTE_FINALIZED: "quote_finalized",
@@ -68,6 +69,13 @@ export const MESSAGE_TYPE_DEFINITIONS: MessageTypeDefinition[] = [
     messageType: MESSAGE_TYPES.NEW_CONTACT_LEAD,
     label: "New Contact Lead",
     description: "Fired when a contact form is submitted",
+    category: "business",
+    audience: "internal",
+  },
+  {
+    messageType: MESSAGE_TYPES.NEW_LEAD,
+    label: "New Lead",
+    description: "Fired when a customer starts a booking (lead stage)",
     category: "business",
     audience: "internal",
   },

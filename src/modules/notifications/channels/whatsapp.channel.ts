@@ -20,6 +20,7 @@ const isWhatsAppConfigured = (): boolean =>
 const WHATSAPP_TEMPLATE_MAP: Partial<Record<string, string>> = {
   new_inquiry: "new_inquiry_alert",
   new_contact_lead: "new_contact_alert",
+  new_lead: "new_lead_alert",
   new_booking: "new_booking_alert",
   payment_received: "payment_received_alert",
   quote_finalized: "quote_finalized_alert",

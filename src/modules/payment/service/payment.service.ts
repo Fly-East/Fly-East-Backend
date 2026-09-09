@@ -29,6 +29,8 @@ import {
   NotificationService,
 } from "../../notifications";
 import { notifyBookingTravelers } from "../../notifications/service/traveler-notification.service";
+import { lookupIpGeo, ipContextFromStored } from "../../../utils/ipGeo";
+import type { IpGeoResult } from "../../../utils/ipGeo";
 
 // ---------------------------------------------------------------------------
 // Provider registry — extend here when adding new gateways
@@ -77,7 +79,8 @@ function isSuccessfulPayment(status: GatewayPaymentStatus): boolean {
 async function dispatchTravelerPaymentStatusNotifications(
   bookingId: string,
   gatewayStatus: GatewayPaymentStatus,
-  previousStatus?: GatewayPaymentStatus
+  previousStatus?: GatewayPaymentStatus,
+  ipContext: Record<string, unknown> = {}
 ): Promise<void> {
   if (
     gatewayStatus === GatewayPaymentStatus.CANCELLED &&
@@ -85,7 +88,11 @@ async function dispatchTravelerPaymentStatusNotifications(
     previousStatus !== GatewayPaymentStatus.CANCELLED &&
     previousStatus !== GatewayPaymentStatus.PAID
   ) {
-    await notifyBookingTravelers(MESSAGE_TYPES.PAYMENT_CANCELLED, bookingId);
+    await notifyBookingTravelers(
+      MESSAGE_TYPES.PAYMENT_CANCELLED,
+      bookingId,
+      ipContext
+    );
     return;
   }
 
@@ -94,7 +101,11 @@ async function dispatchTravelerPaymentStatusNotifications(
     previousStatus !== GatewayPaymentStatus.AUTHORIZED &&
     previousStatus !== GatewayPaymentStatus.PAID
   ) {
-    await notifyBookingTravelers(MESSAGE_TYPES.PAYMENT_AUTHORIZED, bookingId);
+    await notifyBookingTravelers(
+      MESSAGE_TYPES.PAYMENT_AUTHORIZED,
+      bookingId,
+      ipContext
+    );
   }
 }
 
@@ -104,7 +115,8 @@ async function dispatchTravelerPaymentStatusNotifications(
  */
 async function syncBookingFromGateway(
   bookingId: string,
-  gatewayStatus: GatewayPaymentStatus
+  gatewayStatus: GatewayPaymentStatus,
+  ipContext: Record<string, unknown> = {}
 ): Promise<void> {
   const paymentStatus = toBookingPaymentStatus(gatewayStatus);
   const update: Record<string, unknown> = { paymentStatus };
@@ -139,6 +151,7 @@ async function syncBookingFromGateway(
           customerName: booking.personalInfo?.[0]?.fullName,
           customerEmail: booking.personalInfo?.[0]?.email,
           gatewayStatus,
+          ...ipContext,
         });
       })
       .catch((err) => {
@@ -261,7 +274,8 @@ export async function initiatePayment(
     paymentStatus?: string;
     status?: string;
   },
-  providerKey: string
+  providerKey: string,
+  clientIp?: string
 ): Promise<string> {
   await assertBookingCanInitiatePayment(booking);
 
@@ -333,7 +347,14 @@ export async function initiatePayment(
           },
         });
 
-        await syncBookingFromGateway(bookingId, latest.gatewayStatus);
+        await syncBookingFromGateway(
+          bookingId,
+          latest.gatewayStatus,
+          ipContextFromStored(
+            existing.clientIp,
+            existing.ipMeta as IpGeoResult | undefined
+          )
+        );
 
         logger.info(
           `[payment] Not reusing session ${existing.orderNo} for booking ${bookingId}; gateway status is ${latest.gatewayStatus}`
@@ -390,6 +411,10 @@ export async function initiatePayment(
     bookingReference,
   });
 
+  const ipMeta: IpGeoResult | undefined = clientIp
+    ? await lookupIpGeo(clientIp)
+    : undefined;
+
   await Payment.create({
     booking: bookingId,
     bookingReference,
@@ -399,6 +424,8 @@ export async function initiatePayment(
     currency,
     status: GatewayPaymentStatus.PENDING,
     providerMeta: { providerOrderRef, redirectUrl },
+    ...(clientIp ? { clientIp } : {}),
+    ...(ipMeta ? { ipMeta } : {}),
     initiatedAt: new Date(),
   });
 
@@ -488,11 +515,16 @@ export async function handleWebhook(
 
   // Update the booking's payment status (+ confirm when paid)
   if (bookingId) {
-    await syncBookingFromGateway(bookingId, gatewayStatus);
+    const ipContext = ipContextFromStored(
+      payment?.clientIp,
+      payment?.ipMeta as IpGeoResult | undefined
+    );
+    await syncBookingFromGateway(bookingId, gatewayStatus, ipContext);
     await dispatchTravelerPaymentStatusNotifications(
       bookingId,
       gatewayStatus,
-      previousStatus
+      previousStatus,
+      ipContext
     );
   }
 }
@@ -599,11 +631,16 @@ export async function reconcilePendingPayments(): Promise<void> {
         const bookingId = payment.booking?.toString();
         if (bookingId) {
           const previousStatus = payment.status as GatewayPaymentStatus;
-          await syncBookingFromGateway(bookingId, gatewayStatus);
+          const ipContext = ipContextFromStored(
+            payment.clientIp,
+            payment.ipMeta as IpGeoResult | undefined
+          );
+          await syncBookingFromGateway(bookingId, gatewayStatus, ipContext);
           await dispatchTravelerPaymentStatusNotifications(
             bookingId,
             gatewayStatus,
-            previousStatus
+            previousStatus,
+            ipContext
           );
           logger.info(
             `[reconcile] ${payment.orderNo}: ${payment.status} → ${gatewayStatus} (booking ${bookingId})`
@@ -656,7 +693,11 @@ export async function reconcilePendingPayments(): Promise<void> {
         await dispatchTravelerPaymentStatusNotifications(
           bookingId,
           GatewayPaymentStatus.CANCELLED,
-          GatewayPaymentStatus.PENDING
+          GatewayPaymentStatus.PENDING,
+          ipContextFromStored(
+            payment.clientIp,
+            payment.ipMeta as IpGeoResult | undefined
+          )
         );
       }
     } catch (err) {

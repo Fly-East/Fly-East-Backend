@@ -104,6 +104,12 @@ const seedDefaultContactsAndSubscriptions = async (): Promise<void> => {
       isEnabled: true,
     },
     {
+      messageType: MESSAGE_TYPES.NEW_LEAD,
+      contactPersonId: supportContact._id,
+      primaryChannel: NOTIFICATION_CHANNELS[0],
+      isEnabled: true,
+    },
+    {
       messageType: MESSAGE_TYPES.SYSTEM_ERROR,
       contactPersonId: adminContact._id,
       primaryChannel: NOTIFICATION_CHANNELS[0],

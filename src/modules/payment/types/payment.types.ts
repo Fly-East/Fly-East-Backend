@@ -84,6 +84,10 @@ export interface PaymentDocument extends Document {
   currency: string;
   status: GatewayPaymentStatus;
   providerMeta: Record<string, unknown>;
+  /** Client IP that initiated this payment session */
+  clientIp?: string;
+  /** Full ip-api.com lookup result for clientIp */
+  ipMeta?: Record<string, unknown>;
   initiatedAt: Date;
   resolvedAt?: Date;
 }
