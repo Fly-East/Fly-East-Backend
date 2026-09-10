@@ -35,7 +35,7 @@ export interface CustomBookingType extends Document {
   totalAmount: number;
   currency: string;
   totalPeople: number;
-  package: Types.ObjectId;
+  package?: Types.ObjectId;
   personalInfo: {
     fullName: string;
     email: string;

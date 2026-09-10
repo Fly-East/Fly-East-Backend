@@ -28,7 +28,7 @@ export interface Traveler {
 
 export interface IBooking {
   _id: Types.ObjectId;
-  package: { name: string; _id: Types.ObjectId };
+  package?: { name: string; _id: Types.ObjectId };
   createdBy?: { name: string; email: string; _id: Types.ObjectId };
   personalInfo: Traveler[];
   tripDetails: {

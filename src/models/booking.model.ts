@@ -200,7 +200,7 @@ const BookingSchema = new Schema<BookingType>(
     package: {
       type: Schema.Types.ObjectId,
       ref: "Package",
-      required: true,
+      required: false,
     },
     fixedDate: {
       type: Schema.Types.ObjectId,

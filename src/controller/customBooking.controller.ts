@@ -102,7 +102,6 @@ const createCustomBooking = async (req: Request, res: Response) => {
     if (arrivalDate == null) missingFields.push("arrivalDate");
     if (departureDate == null) missingFields.push("departureDate");
     if (totalPeople == null) missingFields.push("totalPeople");
-    if (!packageId) missingFields.push("package");
     if (!customItinerary) missingFields.push("customItinerary");
 
     if (missingFields.length > 0) {
@@ -124,16 +123,18 @@ const createCustomBooking = async (req: Request, res: Response) => {
       });
     }
 
-    // Validate if package exists
-    const existingPackage = await Package.findById(packageId).select(
-      "name duration"
-    );
-    if (!existingPackage) {
-      return res.status(404).json({
-        status: "fail",
-        message: "Package not found",
-      });
+    let existingPackage: { _id: Types.ObjectId; name?: string } | null = null;
+    if (packageId) {
+      existingPackage = await Package.findById(packageId).select("name duration");
+      if (!existingPackage) {
+        return res.status(404).json({
+          status: "fail",
+          message: "Package not found",
+        });
+      }
     }
+
+    const tripLabel = existingPackage?.name || "Custom itinerary";
 
     // Generate a unique booking reference
     const generateBookingReference = (): string => {
@@ -163,7 +164,7 @@ const createCustomBooking = async (req: Request, res: Response) => {
           startTripDate: startTripDate ? new Date(startTripDate) : undefined,
           departureDate: new Date(departureDate),
           totalPeople,
-          package: packageId,
+          ...(packageId ? { package: packageId } : {}),
           message,
           customItinerary: normalizedItinerary,
           createdBy,
@@ -188,10 +189,14 @@ const createCustomBooking = async (req: Request, res: Response) => {
       const bookingForEmail: IBooking = {
         ...newBooking.toObject(),
         _id: newBooking._id,
-        package: {
-          _id: newBooking.package as Types.ObjectId,
-          name: existingPackage?.name || "Package Name",
-        },
+        ...(existingPackage
+          ? {
+              package: {
+                _id: existingPackage._id as Types.ObjectId,
+                name: existingPackage.name || tripLabel,
+              },
+            }
+          : {}),
         personalInfo: personalInfo.map((info: Traveler) => ({
           fullName: info.fullName,
           email: info.email.toLowerCase(),
@@ -199,7 +204,7 @@ const createCustomBooking = async (req: Request, res: Response) => {
           phoneNumber: info.phoneNumber,
         })),
         tripDetails: {
-          parentType: existingPackage?.name || "Trip",
+          parentType: tripLabel,
           arrivalDate: newBooking.arrivalDate,
           departureDate: newBooking.departureDate,
           message: newBooking.message,
@@ -581,7 +586,7 @@ const prepareCustomBookingQuote = async (req: Request, res: Response) => {
       totalAmount: 0,
       currency: customBooking.currency || "USD",
       totalPeople: customBooking.totalPeople,
-      package: customBooking.package,
+      ...(customBooking.package ? { package: customBooking.package } : {}),
       personalInfo: customBooking.personalInfo.map((info) => ({
         fullName: info.fullName,
         email: info.email,

@@ -95,7 +95,7 @@ export interface BookingType extends Document {
   totalAmount: number;
   currency: string;
   totalPeople: number;
-  package: Types.ObjectId;
+  package?: Types.ObjectId;
   fixedDate?: Types.ObjectId;
   personalInfo: {
     fullName: string;

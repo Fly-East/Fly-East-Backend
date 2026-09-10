@@ -1237,8 +1237,12 @@ const finalizeQuote = async (req: Request, res: Response) => {
     }
 
     const snapshot = await buildFinalSnapshotFromRequest(booking, req.body || {});
-    const pkg = await Package.findById(booking.package).select("name");
-    const packageName = (pkg as any)?.name || "Package";
+    const pkg = booking.package
+      ? await Package.findById(booking.package).select("name")
+      : null;
+    const packageName =
+      (pkg as any)?.name ||
+      (booking.sourceCustomBookingId ? "Custom itinerary" : "Package");
     const publicView = toPublicView(snapshot, packageName);
 
     // Persist per-booking people / custom dates on this quote only

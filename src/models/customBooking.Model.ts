@@ -106,7 +106,7 @@ const CustomBookingSchema = new Schema<CustomBookingType>(
     package: {
       type: Schema.Types.ObjectId,
       ref: "Package",
-      required: true,
+      required: false,
     },
     personalInfo: [
       {
