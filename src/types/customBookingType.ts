@@ -15,6 +15,19 @@ export const PaymentStatus = {
 } as const;
 export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 
+export interface CustomItineraryDay {
+  sortOrder: number;
+  title: string;
+  fromLocation?: string;
+  toLocation?: string;
+  description?: string;
+  duration?: string;
+  maxAltitude?: string;
+  activity?: string;
+  meals?: string;
+  accommodation?: string;
+}
+
 export interface CustomBookingType extends Document {
   bookingReference: string;
   status: BookingStatus;
@@ -33,6 +46,8 @@ export interface CustomBookingType extends Document {
   startTripDate?: Date;
   departureDate: Date;
   message?: string;
+  customItinerary: CustomItineraryDay[];
+  linkedBookingId?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
   cancelledAt?: Date;

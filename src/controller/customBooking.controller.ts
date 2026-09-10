@@ -1,7 +1,13 @@
 import CustomBooking from "../models/customBooking.Model";
+import Booking from "../models/booking.model";
 import mongoose, { Types } from "mongoose";
 import { Request, Response } from "express";
-import { BookingStatus, PaymentStatus } from "../types/booking.type";
+import {
+  BookingStatus,
+  PaymentStatus,
+  BookingStage,
+  QuoteStatus,
+} from "../types/booking.type";
 import Package from "../models/package.model";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
@@ -44,6 +50,37 @@ interface CustomBookingCache {
   };
 }
 
+const normalizeCustomItinerary = (days: unknown) => {
+  if (!Array.isArray(days) || days.length === 0) {
+    return null;
+  }
+
+  const normalized = days
+    .map((day: any, index: number) => {
+      const title = typeof day?.title === "string" ? day.title.trim() : "";
+      if (!title) return null;
+
+      const optionalString = (value: unknown) =>
+        typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+      return {
+        sortOrder: index,
+        title,
+        fromLocation: optionalString(day?.fromLocation),
+        toLocation: optionalString(day?.toLocation),
+        description: optionalString(day?.description),
+        duration: optionalString(day?.duration),
+        maxAltitude: optionalString(day?.maxAltitude),
+        activity: optionalString(day?.activity),
+        meals: optionalString(day?.meals),
+        accommodation: optionalString(day?.accommodation),
+      };
+    })
+    .filter(Boolean);
+
+  return normalized.length > 0 ? normalized : null;
+};
+
 const createCustomBooking = async (req: Request, res: Response) => {
   let session: mongoose.ClientSession | null = null;
   try {
@@ -55,7 +92,7 @@ const createCustomBooking = async (req: Request, res: Response) => {
       totalPeople,
       package: packageId,
       message,
-
+      customItinerary,
       createdBy,
     } = req.body;
 
@@ -66,6 +103,7 @@ const createCustomBooking = async (req: Request, res: Response) => {
     if (departureDate == null) missingFields.push("departureDate");
     if (totalPeople == null) missingFields.push("totalPeople");
     if (!packageId) missingFields.push("package");
+    if (!customItinerary) missingFields.push("customItinerary");
 
     if (missingFields.length > 0) {
       return res.status(400).json({
@@ -75,6 +113,14 @@ const createCustomBooking = async (req: Request, res: Response) => {
         details: `The following fields are required: ${missingFields.join(
           ", "
         )}`,
+      });
+    }
+
+    const normalizedItinerary = normalizeCustomItinerary(customItinerary);
+    if (!normalizedItinerary) {
+      return res.status(400).json({
+        status: "fail",
+        message: "At least one itinerary day with a title is required",
       });
     }
 
@@ -107,7 +153,6 @@ const createCustomBooking = async (req: Request, res: Response) => {
     const newBookings = await CustomBooking.create(
       [
         {
-          ...req.body,
           personalInfo: personalInfo.map((info: Traveler) => ({
             fullName: info.fullName,
             email: info.email.toLowerCase(),
@@ -120,6 +165,7 @@ const createCustomBooking = async (req: Request, res: Response) => {
           totalPeople,
           package: packageId,
           message,
+          customItinerary: normalizedItinerary,
           createdBy,
           bookingReference: generateBookingReference(),
           status: BookingStatus.PENDING,
@@ -157,6 +203,7 @@ const createCustomBooking = async (req: Request, res: Response) => {
           arrivalDate: newBooking.arrivalDate,
           departureDate: newBooking.departureDate,
           message: newBooking.message,
+          tripDays: normalizedItinerary.length,
         },
         createdAt: newBooking.createdAt,
         updatedAt: newBooking.updatedAt,
@@ -452,6 +499,155 @@ const cancelCustomBooking = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Create or reopen a linked Booking for quoting — CustomBooking stays separate.
+ */
+const prepareCustomBookingQuote = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid custom booking ID",
+      });
+    }
+
+    const customBooking = await CustomBooking.findById(id);
+    if (!customBooking) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Custom booking not found",
+      });
+    }
+
+    if (customBooking.status === BookingStatus.CANCELLED) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Cannot prepare a quote for a cancelled custom booking",
+      });
+    }
+
+    if (customBooking.linkedBookingId) {
+      const existing = await Booking.findById(customBooking.linkedBookingId)
+        .select("_id bookingReference quoteStatus status")
+        .lean();
+      if (existing) {
+        return res.status(200).json({
+          status: "success",
+          message: "Linked booking already exists",
+          data: {
+            bookingId: existing._id,
+            bookingReference: existing.bookingReference,
+            created: false,
+          },
+        });
+      }
+    }
+
+    const tripDays = Math.max(
+      1,
+      Array.isArray(customBooking.customItinerary)
+        ? customBooking.customItinerary.length
+        : 1,
+    );
+
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let bookingReference = "";
+    for (let i = 0; i < 8; i++) {
+      bookingReference += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+
+    const itineraryCopy = (customBooking.customItinerary || []).map(
+      (day: any, index: number) => ({
+        sortOrder: index,
+        title: day.title,
+        fromLocation: day.fromLocation,
+        toLocation: day.toLocation,
+        description: day.description,
+        duration: day.duration,
+        maxAltitude: day.maxAltitude,
+        activity: day.activity,
+        meals: day.meals,
+        accommodation: day.accommodation,
+      }),
+    );
+
+    const booking = await Booking.create({
+      bookingReference,
+      stage: BookingStage.ADMIN_QUOTE,
+      status: BookingStatus.PENDING,
+      paymentStatus: PaymentStatus.PENDING,
+      quoteStatus: QuoteStatus.ESTIMATED,
+      totalAmount: 0,
+      currency: customBooking.currency || "USD",
+      totalPeople: customBooking.totalPeople,
+      package: customBooking.package,
+      personalInfo: customBooking.personalInfo.map((info) => ({
+        fullName: info.fullName,
+        email: info.email,
+        country: info.country,
+        phoneNumber: info.phoneNumber,
+      })),
+      arrivalDate: customBooking.arrivalDate,
+      departureDate: customBooking.departureDate,
+      message: customBooking.message,
+      customItinerary: itineraryCopy,
+      sourceCustomBookingId: customBooking._id,
+      pricing: {
+        currency: "USD",
+        tripDays,
+        totalPeople: customBooking.totalPeople,
+        basePricePerPerson: 0,
+        discountPercent: 0,
+        pricePerPerson: 0,
+        packageBase: 0,
+        addonsTotal: 0,
+        participantSurcharge: 0,
+        includedParticipants: 0,
+        extraParticipants: 0,
+        totalPeopleOnTrip: customBooking.totalPeople,
+        subtotal: 0,
+        vatPercent: 0,
+        vatAmount: 0,
+        transactionChargePercent: 0,
+        transactionChargeAmount: 0,
+        grandTotal: 0,
+        amountDueNow: 0,
+      },
+      selectedAddons: [],
+      seen: false,
+    });
+
+    customBooking.linkedBookingId = booking._id as Types.ObjectId;
+    await customBooking.save();
+
+    await clearCacheByPrefix("customBookings:");
+    await clearCacheByPrefix("bookings:");
+
+    return res.status(201).json({
+      status: "success",
+      message: "Linked booking created for quoting",
+      data: {
+        bookingId: booking._id,
+        bookingReference: booking.bookingReference,
+        created: true,
+      },
+    });
+  } catch (error) {
+    logger.error(
+      {
+        message: "prepareCustomBookingQuote failed",
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "prepareCustomBookingQuote"
+    );
+    return res.status(500).json({
+      status: "error",
+      message: "Failed to prepare quote booking",
+    });
+  }
+};
+
 const bookingController = {
   createCustomBooking,
   getAllCustomBookings,
@@ -459,6 +655,7 @@ const bookingController = {
   cancelCustomBooking,
   updateCustomBookingStatus,
   deleteCustomBooking,
+  prepareCustomBookingQuote,
 };
 
 export default bookingController;

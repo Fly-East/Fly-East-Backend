@@ -265,6 +265,29 @@ const BookingSchema = new Schema<BookingType>(
       type: String,
       trim: false,
     },
+    customItinerary: {
+      type: [
+        {
+          sortOrder: { type: Number, required: true, min: 0 },
+          title: { type: String, required: true, trim: true },
+          fromLocation: { type: String, trim: true },
+          toLocation: { type: String, trim: true },
+          description: { type: String, trim: false },
+          duration: { type: String, trim: true },
+          maxAltitude: { type: String, trim: true },
+          activity: { type: String, trim: true },
+          meals: { type: String, trim: true },
+          accommodation: { type: String, trim: true },
+        },
+      ],
+      required: false,
+      default: undefined,
+    },
+    sourceCustomBookingId: {
+      type: Schema.Types.ObjectId,
+      ref: "CustomBooking",
+      required: false,
+    },
     seen: {
       type: Boolean,
       default: false,

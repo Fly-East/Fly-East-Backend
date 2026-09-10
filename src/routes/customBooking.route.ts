@@ -7,6 +7,7 @@ const {
   updateCustomBookingStatus,
   deleteCustomBooking,
   cancelCustomBooking,
+  prepareCustomBookingQuote,
 } = customBookingController;
 import { checkPermissions, isAdmin } from "../middleware/isAdmin";
 
@@ -16,6 +17,13 @@ router.post("/api/v1/custom-booking", createCustomBooking);
 router.get("/api/v1/custom-booking", isAdmin, getAllCustomBookings);
 
 router.get("/api/v1/custom-booking/:id", getCustomBookingById);
+
+router.post(
+  "/api/v1/custom-booking/:id/prepare-quote",
+  isAdmin,
+  checkPermissions(["edit"]),
+  prepareCustomBookingQuote
+);
 
 router.patch(
   "/api/v1/custom-booking/:id/status",

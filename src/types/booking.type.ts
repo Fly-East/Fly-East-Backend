@@ -107,6 +107,21 @@ export interface BookingType extends Document {
   arrivalDate?: Date;
   departureDate?: Date;
   message?: string;
+  /** Day-by-day plan for custom-itinerary quotes (Booking-owned after admin edits) */
+  customItinerary?: {
+    sortOrder: number;
+    title: string;
+    fromLocation?: string;
+    toLocation?: string;
+    description?: string;
+    duration?: string;
+    maxAltitude?: string;
+    activity?: string;
+    meals?: string;
+    accommodation?: string;
+  }[];
+  /** Soft link back to CustomBooking request (separable; no cascade) */
+  sourceCustomBookingId?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
   cancelledAt?: Date;

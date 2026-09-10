@@ -42,15 +42,29 @@ const formatDate = (date?: Date | string | null): string => {
   });
 };
 
+const formatTripDays = (tripDays: unknown): string | null => {
+  const days = Math.floor(Number(tripDays));
+  if (!Number.isFinite(days) || days < 1) return null;
+  return `${days} day${days === 1 ? "" : "s"}`;
+};
+
 const tripDuration = (
   arrival?: Date | string,
-  departure?: Date | string
+  departure?: Date | string,
+  tripDays?: unknown
 ): string => {
+  const fromItinerary = formatTripDays(tripDays);
+  if (fromItinerary) return fromItinerary;
+
   if (!arrival || !departure) return "Not specified";
   const start = new Date(arrival);
   const end = new Date(departure);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return "Not specified";
+  }
   const days =
     Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  if (days < 1) return "Not specified";
   return `${days} day${days === 1 ? "" : "s"}`;
 };
 
@@ -235,8 +249,10 @@ function buildBookingConfirmationContent(
   const tripType = (context.tripType as string) || "Trip";
   const arrivalDate = context.arrivalDate as string | Date | undefined;
   const departureDate = context.departureDate as string | Date | undefined;
+  const tripDays = context.tripDays;
   const message = context.message as string | undefined;
   const contactEmail = ADMIN_EMAIL;
+  const durationLabel = tripDuration(arrivalDate, departureDate, tripDays);
 
   const subject = "Booking Confirmation";
 
@@ -256,7 +272,7 @@ function buildBookingConfirmationContent(
     tripType,
     arrivalDate: formatDate(arrivalDate),
     departureDate: formatDate(departureDate),
-    duration: tripDuration(arrivalDate, departureDate),
+    duration: durationLabel,
     message,
     contactEmail: contactEmail || undefined,
   });
@@ -274,7 +290,7 @@ Booking ID: ${bookingId}
 Trip Type: ${tripType}
 Arrival Date: ${formatDate(arrivalDate)}
 Departure Date: ${formatDate(departureDate)}
-Duration: ${tripDuration(arrivalDate, departureDate)}
+Duration: ${durationLabel}
 
 ${message ? `ADDITIONAL INFORMATION:\n${message}\n` : ""}
 We will contact you soon to confirm the details.
