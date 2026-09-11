@@ -9,6 +9,8 @@ export interface IPackageAddon extends Document {
   isDefault: boolean;
   allowsQuantity: boolean;
   costsParticipants: boolean;
+  /** Optional package-level override; falls back to catalog addon description when empty */
+  description?: string;
   defaultQuantity: number;
   maxQuantity: number | null;
   isActive: boolean;

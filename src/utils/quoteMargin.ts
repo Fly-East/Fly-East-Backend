@@ -42,7 +42,12 @@ function round2(value: number): number {
 function normalizePricingType(
   value: string | undefined
 ): BookingPricingType {
-  if (value === "perPerson" || value === "perDay" || value === "perBooking") {
+  if (
+    value === "perPerson" ||
+    value === "perDay" ||
+    value === "perBooking" ||
+    value === "perPersonPerDay"
+  ) {
     return value;
   }
   if (value === "perPackage") return "perPerson";
@@ -72,6 +77,8 @@ export function includedLineCoverageCost(
       return price * qty * people;
     case "perDay":
       return price * qty * days;
+    case "perPersonPerDay":
+      return price * qty * people * days;
     case "perBooking":
     default:
       return price * qty;
@@ -101,6 +108,10 @@ function includedLineFormula(
       return qty > 1
         ? `${priceLabel} × ${qty} × ${days} days`
         : `${priceLabel} × ${days} days`;
+    case "perPersonPerDay":
+      return qty > 1
+        ? `${priceLabel} × ${qty} × ${people} travelers × ${days} days`
+        : `${priceLabel} × ${people} travelers × ${days} days`;
     case "perBooking":
     default:
       return qty > 1 ? `${priceLabel} × ${qty}` : priceLabel;

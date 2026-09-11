@@ -138,7 +138,12 @@ const finalQuoteAddonDraft = z
     name: z.string().min(1),
     quantity: z.number().int().min(1),
     unitPrice: z.number().min(0),
-    pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
+    pricingType: z.enum([
+      "perPerson",
+      "perDay",
+      "perBooking",
+      "perPersonPerDay",
+    ]).optional(),
     isDefault: z.boolean().optional(),
     allowsQuantity: z.boolean().optional(),
     costsParticipants: z.boolean().optional(),
