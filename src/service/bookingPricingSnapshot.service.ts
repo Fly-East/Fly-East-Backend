@@ -47,7 +47,12 @@ export type RecalculateFromDraftInput = {
 };
 
 function asPricingType(value: string | undefined): AddonPricingType {
-  if (value === "perPerson" || value === "perDay" || value === "perBooking") {
+  if (
+    value === "perPerson" ||
+    value === "perDay" ||
+    value === "perBooking" ||
+    value === "perPersonPerDay"
+  ) {
     return value;
   }
   if (value === "perPackage") return "perPerson";

@@ -38,6 +38,11 @@ const PackageAddonSchema = new Schema<IPackageAddon>(
       type: Boolean,
       default: false,
     },
+    description: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
     defaultQuantity: {
       type: Number,
       default: 1,
