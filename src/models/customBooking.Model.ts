@@ -5,6 +5,54 @@ import {
   PaymentStatus,
 } from "../types/customBookingType";
 
+const CustomItineraryDaySchema = new Schema(
+  {
+    sortOrder: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    fromLocation: {
+      type: String,
+      trim: true,
+    },
+    toLocation: {
+      type: String,
+      trim: true,
+    },
+    description: {
+      type: String,
+      trim: false,
+    },
+    duration: {
+      type: String,
+      trim: true,
+    },
+    maxAltitude: {
+      type: String,
+      trim: true,
+    },
+    activity: {
+      type: String,
+      trim: true,
+    },
+    meals: {
+      type: String,
+      trim: true,
+    },
+    accommodation: {
+      type: String,
+      trim: true,
+    },
+  },
+  { _id: false }
+);
+
 const CustomBookingSchema = new Schema<CustomBookingType>(
   {
     bookingReference: {
@@ -58,7 +106,7 @@ const CustomBookingSchema = new Schema<CustomBookingType>(
     package: {
       type: Schema.Types.ObjectId,
       ref: "Package",
-      required: true,
+      required: false,
     },
     personalInfo: [
       {
@@ -106,6 +154,19 @@ const CustomBookingSchema = new Schema<CustomBookingType>(
     message: {
       type: String,
       trim: false,
+    },
+    customItinerary: {
+      type: [CustomItineraryDaySchema],
+      required: true,
+      validate: {
+        validator: (days: unknown[]) => Array.isArray(days) && days.length > 0,
+        message: "At least one itinerary day is required",
+      },
+    },
+    linkedBookingId: {
+      type: Schema.Types.ObjectId,
+      ref: "Booking",
+      required: false,
     },
     seen: {
       type: Boolean,

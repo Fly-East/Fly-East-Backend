@@ -10,6 +10,10 @@ import {
   type SelectedAddonInput,
 } from "../utils/calculateBookingTotal";
 import { getPricingSettings } from "./pricingSettings.service";
+import {
+  calculateQuoteOperatorMargin,
+  type QuoteOperatorMargin,
+} from "../utils/quoteMargin";
 
 export type BookingQuoteAddonInput = {
   id: string;
@@ -30,6 +34,13 @@ export type BookingQuoteInput = {
   /** Optional overrides (admin final quote); otherwise global settings */
   vatPercent?: number;
   transactionChargePercent?: number;
+  /**
+   * When true, fullBreakdown includes operatorMargin (admin quote tester).
+   * Never exposed on public preview.
+   */
+  includeMargin?: boolean;
+  /** Target margin % of sell for suggestedBasePerPerson (default 15) */
+  targetMarginPercent?: number;
 };
 
 export type BookingQuoteCovers = {
@@ -68,6 +79,8 @@ export type BookingQuoteResult = {
   publicView: BookingQuotePublicView;
   fullBreakdown: CalculateBookingTotalResult & {
     discount: BookingQuoteDiscountMeta;
+    /** Present only when includeMargin was requested */
+    operatorMargin?: QuoteOperatorMargin;
   };
   /** Catalog + quantities used for the quote (for snapshots) */
   selectedAddons: SelectedAddonInput[];
@@ -329,6 +342,18 @@ export async function quoteBooking(
         discountPercent,
         ...(appliedPaxRange && { appliedPaxRange }),
       },
+      ...(input.includeMargin
+        ? {
+            operatorMargin: calculateQuoteOperatorMargin({
+              totalPeople: totals.totalPeople,
+              tripDays: totals.tripDays,
+              packageBase: totals.packageBase,
+              sellTotal: totals.grandTotal,
+              addonLines: totals.addonLines,
+              targetMarginPercent: input.targetMarginPercent,
+            }),
+          }
+        : {}),
     },
     selectedAddons,
   };

@@ -11,8 +11,9 @@ import {
 import Package from "../models/package.model";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
-import { FixedDate } from "../models";
+import { FixedDate, Itinerary } from "../models";
 import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
+import { resolveBookingTripWindow } from "../utils/bookingTripWindow";
 import { notifyBookingTravelers } from "../modules/notifications/service/traveler-notification.service";
 import { Traveler } from "../service/email.service";
 import {
@@ -94,6 +95,8 @@ const quoteBookingAdmin = async (req: Request, res: Response) => {
       fixedDateId,
       totalPeople,
       addons,
+      includeMargin,
+      targetMarginPercent,
     } = req.body;
 
     const quote = await quoteBooking({
@@ -101,6 +104,8 @@ const quoteBookingAdmin = async (req: Request, res: Response) => {
       fixedDateId,
       totalPeople,
       addons,
+      includeMargin: includeMargin === true,
+      targetMarginPercent,
     });
 
     return res.status(200).json({
@@ -1055,13 +1060,38 @@ const buildFinalSnapshotFromRequest = async (
     booking.finalPricing?.tripDays ||
     1;
 
-  if (body.arrivalDate && body.departureDate) {
+  const hasExplicitTripDays =
+    body.tripDays !== undefined &&
+    body.tripDays !== null &&
+    body.tripDays !== "" &&
+    Number.isFinite(Number(body.tripDays)) &&
+    Number(body.tripDays) > 0;
+
+  const itineraryDayCount = (days: unknown): number => {
+    if (!Array.isArray(days)) return 0;
+    return days.filter((day: any) => {
+      const title = typeof day?.title === "string" ? day.title.trim() : "";
+      return Boolean(title);
+    }).length;
+  };
+
+  const snapshotItineraryDays = Math.max(
+    itineraryDayCount(body.customItinerary),
+    itineraryDayCount(booking.customItinerary),
+  );
+
+  // Prefer explicit tripDays, then booking itinerary snapshot length, then date span.
+  if (hasExplicitTripDays) {
+    tripDays = Math.max(1, Math.floor(Number(body.tripDays)));
+  } else if (snapshotItineraryDays > 0) {
+    tripDays = snapshotItineraryDays;
+  } else if (body.arrivalDate && body.departureDate) {
     const start = new Date(body.arrivalDate);
     const end = new Date(body.departureDate);
     if (
       !Number.isNaN(start.getTime()) &&
       !Number.isNaN(end.getTime()) &&
-      end.getTime() > start.getTime()
+      end.getTime() >= start.getTime()
     ) {
       const ms = end.getTime() - start.getTime();
       tripDays = Math.max(1, Math.round(ms / (1000 * 60 * 60 * 24)) + 1);
@@ -1208,8 +1238,12 @@ const finalizeQuote = async (req: Request, res: Response) => {
     }
 
     const snapshot = await buildFinalSnapshotFromRequest(booking, req.body || {});
-    const pkg = await Package.findById(booking.package).select("name");
-    const packageName = (pkg as any)?.name || "Package";
+    const pkg = booking.package
+      ? await Package.findById(booking.package).select("name")
+      : null;
+    const packageName =
+      (pkg as any)?.name ||
+      (booking.sourceCustomBookingId ? "Custom itinerary" : "Package");
     const publicView = toPublicView(snapshot, packageName);
 
     // Persist per-booking people / custom dates on this quote only
@@ -1222,6 +1256,32 @@ const finalizeQuote = async (req: Request, res: Response) => {
     }
     if (req.body?.useCustomDates === true) {
       booking.fixedDate = undefined;
+    }
+
+    if (Array.isArray(req.body?.customItinerary)) {
+      const normalized = req.body.customItinerary
+        .map((day: any, index: number) => {
+          const title = typeof day?.title === "string" ? day.title.trim() : "";
+          if (!title) return null;
+          const opt = (v: unknown) =>
+            typeof v === "string" && v.trim() ? v.trim() : undefined;
+          return {
+            sortOrder: index,
+            title,
+            fromLocation: opt(day?.fromLocation),
+            toLocation: opt(day?.toLocation),
+            description: opt(day?.description),
+            duration: opt(day?.duration),
+            maxAltitude: opt(day?.maxAltitude),
+            activity: opt(day?.activity),
+            meals: opt(day?.meals),
+            accommodation: opt(day?.accommodation),
+          };
+        })
+        .filter(Boolean);
+      if (normalized.length > 0) {
+        booking.customItinerary = normalized as any;
+      }
     }
 
     if (!booking.seatsReserved && booking.fixedDate) {
@@ -1366,10 +1426,9 @@ const getPublicQuote = async (req: Request, res: Response) => {
     }
 
     const hash = hashQuoteToken(token);
-    const booking = await Booking.findOne({ quoteTokenHash: hash }).populate(
-      "package",
-      "name"
-    );
+    const booking = await Booking.findOne({ quoteTokenHash: hash })
+      .populate("package", "name")
+      .populate("fixedDate", "startDate endDate");
 
     if (!booking || !booking.finalPricing) {
       return res.status(404).json({ status: "fail", message: "Quote not found" });
@@ -1395,6 +1454,45 @@ const getPublicQuote = async (req: Request, res: Response) => {
       packageName
     );
 
+    let customItinerary = Array.isArray(booking.customItinerary)
+      ? booking.customItinerary
+      : [];
+
+    if (customItinerary.length === 0) {
+      const packageId =
+        (booking.package as any)?._id || booking.package || null;
+      if (packageId) {
+        const packageDays = await Itinerary.find({
+          package: packageId,
+          isActive: true,
+        })
+          .sort({ sortOrder: 1 })
+          .lean();
+
+        customItinerary = packageDays.map((day: any, index: number) => ({
+          sortOrder: Number.isFinite(Number(day.sortOrder))
+            ? Number(day.sortOrder)
+            : index,
+          title: day.title || `Day ${index + 1}`,
+          description: day.description || undefined,
+          duration: day.duration || undefined,
+          maxAltitude: day.maxAltitude || undefined,
+          activity: day.activity || undefined,
+          meals: day.meals || undefined,
+          accommodation: day.accommodation || undefined,
+        }));
+      }
+    }
+
+    const { tripStartDate, tripEndDate } = resolveBookingTripWindow({
+      arrivalDate: booking.arrivalDate,
+      departureDate: booking.departureDate,
+      fixedDate: booking.fixedDate as
+        | { startDate?: Date; endDate?: Date }
+        | null
+        | undefined,
+    });
+
     const latestPayment = await Payment.findOne({ booking: booking._id })
       .sort({ initiatedAt: -1 })
       .select("status")
@@ -1407,6 +1505,9 @@ const getPublicQuote = async (req: Request, res: Response) => {
         paymentStatus: booking.paymentStatus,
         bookingStatus: booking.status,
         bookingReference: booking.bookingReference,
+        tripStartDate,
+        tripEndDate,
+        customItinerary,
         gatewayPaymentStatus: latestPayment?.status ?? null,
         paymentCancelled:
           latestPayment?.status === GatewayPaymentStatus.CANCELLED,
