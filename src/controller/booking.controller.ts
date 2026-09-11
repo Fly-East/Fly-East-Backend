@@ -11,8 +11,9 @@ import {
 import Package from "../models/package.model";
 import logger from "../utils/logger";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
-import { FixedDate } from "../models";
+import { FixedDate, Itinerary } from "../models";
 import { emitNotification, MESSAGE_TYPES } from "../modules/notifications";
+import { resolveBookingTripWindow } from "../utils/bookingTripWindow";
 import { notifyBookingTravelers } from "../modules/notifications/service/traveler-notification.service";
 import { Traveler } from "../service/email.service";
 import {
@@ -1425,10 +1426,9 @@ const getPublicQuote = async (req: Request, res: Response) => {
     }
 
     const hash = hashQuoteToken(token);
-    const booking = await Booking.findOne({ quoteTokenHash: hash }).populate(
-      "package",
-      "name"
-    );
+    const booking = await Booking.findOne({ quoteTokenHash: hash })
+      .populate("package", "name")
+      .populate("fixedDate", "startDate endDate");
 
     if (!booking || !booking.finalPricing) {
       return res.status(404).json({ status: "fail", message: "Quote not found" });
@@ -1454,6 +1454,45 @@ const getPublicQuote = async (req: Request, res: Response) => {
       packageName
     );
 
+    let customItinerary = Array.isArray(booking.customItinerary)
+      ? booking.customItinerary
+      : [];
+
+    if (customItinerary.length === 0) {
+      const packageId =
+        (booking.package as any)?._id || booking.package || null;
+      if (packageId) {
+        const packageDays = await Itinerary.find({
+          package: packageId,
+          isActive: true,
+        })
+          .sort({ sortOrder: 1 })
+          .lean();
+
+        customItinerary = packageDays.map((day: any, index: number) => ({
+          sortOrder: Number.isFinite(Number(day.sortOrder))
+            ? Number(day.sortOrder)
+            : index,
+          title: day.title || `Day ${index + 1}`,
+          description: day.description || undefined,
+          duration: day.duration || undefined,
+          maxAltitude: day.maxAltitude || undefined,
+          activity: day.activity || undefined,
+          meals: day.meals || undefined,
+          accommodation: day.accommodation || undefined,
+        }));
+      }
+    }
+
+    const { tripStartDate, tripEndDate } = resolveBookingTripWindow({
+      arrivalDate: booking.arrivalDate,
+      departureDate: booking.departureDate,
+      fixedDate: booking.fixedDate as
+        | { startDate?: Date; endDate?: Date }
+        | null
+        | undefined,
+    });
+
     const latestPayment = await Payment.findOne({ booking: booking._id })
       .sort({ initiatedAt: -1 })
       .select("status")
@@ -1466,7 +1505,9 @@ const getPublicQuote = async (req: Request, res: Response) => {
         paymentStatus: booking.paymentStatus,
         bookingStatus: booking.status,
         bookingReference: booking.bookingReference,
-        customItinerary: booking.customItinerary || [],
+        tripStartDate,
+        tripEndDate,
+        customItinerary,
         gatewayPaymentStatus: latestPayment?.status ?? null,
         paymentCancelled:
           latestPayment?.status === GatewayPaymentStatus.CANCELLED,
