@@ -1,4 +1,8 @@
-export type BookingPricingType = "perPerson" | "perDay" | "perBooking";
+export type BookingPricingType =
+  | "perPerson"
+  | "perDay"
+  | "perBooking"
+  | "perPersonPerDay";
 
 export type AddonCatalogFields = {
   name?: string;
@@ -116,7 +120,12 @@ export function hydrateSelectedAddons(
 const normalizePricingType = (
   value: string | undefined
 ): BookingPricingType => {
-  if (value === "perPerson" || value === "perDay" || value === "perBooking") {
+  if (
+    value === "perPerson" ||
+    value === "perDay" ||
+    value === "perBooking" ||
+    value === "perPersonPerDay"
+  ) {
     return value;
   }
   // Legacy rename
@@ -176,7 +185,7 @@ export function includedPeopleForDefaultAddon(input: {
   if (ppq <= 0) return 0;
   const qty = Math.max(1, Number(input.quantity) || 1);
   const units = qty * ppq;
-  if (input.pricingType === "perPerson") {
+  if (input.pricingType === "perPerson" || input.pricingType === "perPersonPerDay") {
     return units * Math.max(0, Number(input.totalPeople) || 0);
   }
   return units;
@@ -197,6 +206,10 @@ function computeOptionalLineTotal(
       return price * qty * Math.max(0, billablePeople);
     case "perDay":
       return price * qty * Math.max(1, tripDays);
+    case "perPersonPerDay":
+      return (
+        price * qty * Math.max(0, billablePeople) * Math.max(1, tripDays)
+      );
     case "perBooking":
     default:
       return price * qty;
@@ -223,6 +236,13 @@ function optionalFormula(
     }
     case "perDay":
       return `${price} × ${quantity} × ${tripDays} days`;
+    case "perPersonPerDay": {
+      if (costsParticipants && extraParticipants > 0) {
+        const travelers = Math.max(0, billablePeople - extraParticipants);
+        return `${price} × ${quantity} × (${travelers} travelers + ${extraParticipants} extras) × ${tripDays} days`;
+      }
+      return `${price} × ${quantity} × ${billablePeople} travelers × ${tripDays} days`;
+    }
     case "perBooking":
     default:
       return `${price} × ${quantity}`;
@@ -261,6 +281,13 @@ function defaultIncludedFormula(input: {
         qty > 1
           ? `Covered × ${qty} × ${input.tripDays} days`
           : `Covered for ${input.tripDays} days`
+      );
+      break;
+    case "perPersonPerDay":
+      parts.push(
+        qty > 1
+          ? `Covered × ${qty} × ${travelers} ${travelerWord} × ${input.tripDays} days`
+          : `Covered for ${travelers} ${travelerWord} × ${input.tripDays} days`
       );
       break;
     case "perBooking":
@@ -384,9 +411,12 @@ export function calculateBookingTotal(
         extraParticipants += extraPeopleFromLine;
       }
 
-      // Non-perPerson optionals can be priced immediately (no extras dependency).
-      // perPerson waits until extras are known (pass 2).
-      if (pricingType !== "perPerson") {
+      // Non-person-scaled optionals can be priced immediately.
+      // perPerson / perPersonPerDay wait until extras are known (pass 2).
+      if (
+        pricingType !== "perPerson" &&
+        pricingType !== "perPersonPerDay"
+      ) {
         lineTotal = computeOptionalLineTotal(
           unitPrice,
           quantity,
@@ -423,10 +453,15 @@ export function calculateBookingTotal(
     };
   });
 
-  // Pass 2: optional perPerson — travelers only, or travelers + extras
+  // Pass 2: optional perPerson / perPersonPerDay — travelers only, or travelers + extras
   for (const draft of drafts) {
     if (draft.isDefault) continue;
-    if (draft.pricingType !== "perPerson") continue;
+    if (
+      draft.pricingType !== "perPerson" &&
+      draft.pricingType !== "perPersonPerDay"
+    ) {
+      continue;
+    }
 
     const billablePeople = draft.costsParticipants
       ? totalPeople + extraParticipants
@@ -467,9 +502,18 @@ export function calculateBookingTotal(
         includedPeopleFromLine: draft.includedPeopleFromLine,
         extrasCharged: true,
       });
-      draft.lineTotal =
-        draft.unitPrice * draft.quantity * extraParticipants;
-      draft.formula = `$${draft.unitPrice} × ${draft.quantity} × ${extraParticipants} extra participants`;
+      if (draft.pricingType === "perPersonPerDay") {
+        draft.lineTotal =
+          draft.unitPrice *
+          draft.quantity *
+          extraParticipants *
+          tripDays;
+        draft.formula = `$${draft.unitPrice} × ${draft.quantity} × ${extraParticipants} extra participants × ${tripDays} days`;
+      } else {
+        draft.lineTotal =
+          draft.unitPrice * draft.quantity * extraParticipants;
+        draft.formula = `$${draft.unitPrice} × ${draft.quantity} × ${extraParticipants} extra participants`;
+      }
     }
   }
 

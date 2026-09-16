@@ -200,7 +200,21 @@ const buildPackagePayload = async (packageDoc: PackageDocument) => {
     isActive: true,
   })
     .populate("addon")
-    .sort({ sortOrder: 1 });
+    .sort({ sortOrder: 1 })
+    .lean();
+
+  const resolvedAddons = addons.map((offer: any) => {
+    const catalogDescription =
+      offer?.addon && typeof offer.addon === "object"
+        ? offer.addon.description
+        : undefined;
+    const packageDescription =
+      typeof offer.description === "string" ? offer.description.trim() : "";
+    return {
+      ...offer,
+      description: packageDescription || catalogDescription || "",
+    };
+  });
 
   const fixedDates = await getFixedDatesForPackage(populatedPackage._id);
 
@@ -237,7 +251,7 @@ const buildPackagePayload = async (packageDoc: PackageDocument) => {
     reviewCount: activeReviews.length,
     reviewAverage,
     gallery: galleryItems,
-    addons,
+    addons: resolvedAddons,
     fixedDates,
     bookingAvailable,
   };

@@ -28,7 +28,7 @@ export interface Traveler {
 
 export interface IBooking {
   _id: Types.ObjectId;
-  package: { name: string; _id: Types.ObjectId };
+  package?: { name: string; _id: Types.ObjectId };
   createdBy?: { name: string; email: string; _id: Types.ObjectId };
   personalInfo: Traveler[];
   tripDetails: {
@@ -36,6 +36,8 @@ export interface IBooking {
     arrivalDate: Date;
     departureDate: Date;
     message?: string;
+    /** Itinerary day count (preferred for Duration in emails). */
+    tripDays?: number;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -67,6 +69,7 @@ export class EmailService {
             tripType: booking.tripDetails.parentType,
             arrivalDate: booking.tripDetails.arrivalDate,
             departureDate: booking.tripDetails.departureDate,
+            tripDays: booking.tripDetails.tripDays,
             message: booking.tripDetails.message,
           })
         );
@@ -97,10 +100,7 @@ export class EmailService {
       tripType: booking.tripDetails.parentType,
       arrivalDate: this.formatDate(booking.tripDetails.arrivalDate),
       departureDate: this.formatDate(booking.tripDetails.departureDate),
-      duration: this.getTripDuration(
-        booking.tripDetails.arrivalDate,
-        booking.tripDetails.departureDate
-      ),
+      duration: this.resolveTripDuration(booking),
       travelers: booking.personalInfo.map((traveler) => ({
         fullName: traveler.fullName,
         email: traveler.email,
@@ -150,10 +150,7 @@ Booking ID: ${booking._id}
 Trip Type: ${booking.tripDetails.parentType}
 Arrival Date: ${this.formatDate(booking.tripDetails.arrivalDate)}
 Departure Date: ${this.formatDate(booking.tripDetails.departureDate)}
-Duration: ${this.getTripDuration(
-      booking.tripDetails.arrivalDate,
-      booking.tripDetails.departureDate
-    )}
+Duration: ${this.resolveTripDuration(booking)}
 Travelers: ${booking.personalInfo.length}
 Booked At: ${this.formatDate(booking.createdAt)}
 
@@ -182,6 +179,18 @@ Booking System`;
     });
   }
 
+  private resolveTripDuration(booking: IBooking): string {
+    const tripDays = Number(booking.tripDetails.tripDays);
+    if (Number.isFinite(tripDays) && tripDays > 0) {
+      const days = Math.floor(tripDays);
+      return `${days} day${days === 1 ? "" : "s"}`;
+    }
+    return this.getTripDuration(
+      booking.tripDetails.arrivalDate,
+      booking.tripDetails.departureDate,
+    );
+  }
+
   private getTripDuration(
     startDate: Date | string,
     endDate: Date | string
@@ -189,9 +198,13 @@ Booking System`;
     if (!startDate || !endDate) return "Not specified";
     const start = new Date(startDate);
     const end = new Date(endDate);
-    const diffTime = Math.abs(end.getTime() - start.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return `${diffDays} day${diffDays !== 1 ? "s" : ""}`;
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return "Not specified";
+    }
+    const days =
+      Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (days < 1) return "Not specified";
+    return `${days} day${days !== 1 ? "s" : ""}`;
   }
 
   public async sendForgotPasswordEmail(

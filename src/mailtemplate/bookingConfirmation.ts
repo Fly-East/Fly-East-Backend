@@ -58,7 +58,7 @@ export const bookingConfirmationTravelerTemplate = (
 
   const body = `
     <p style="font-size: 16px; margin-bottom: 5px;">Dear <strong>${data.travelerName}</strong>,</p>
-    <p style="font-size: 15px; color: #059669; font-weight: 600; margin-top: 5px;">✅ Your booking has been successfully received!</p>
+    <p style="font-size: 15px; color: #059669; font-weight: 600; margin-top: 5px;">Your booking has been successfully received!</p>
     <p style="margin-top: 15px;">We're excited to have you join us. Below are your booking details:</p>
     
     <h3>Booking Details</h3>

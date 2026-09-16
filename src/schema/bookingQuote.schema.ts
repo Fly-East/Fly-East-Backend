@@ -27,7 +27,10 @@ export const bookingPreviewSchema = z.object({
 });
 
 export const bookingQuoteSchema = z.object({
-  body: quoteBody,
+  body: quoteBody.extend({
+    includeMargin: z.boolean().optional().default(false),
+    targetMarginPercent: z.number().min(0).max(99.99).optional(),
+  }),
 });
 
 export const bookingLeadSchema = z.object({
@@ -135,7 +138,12 @@ const finalQuoteAddonDraft = z
     name: z.string().min(1),
     quantity: z.number().int().min(1),
     unitPrice: z.number().min(0),
-    pricingType: z.enum(["perPerson", "perDay", "perBooking"]).optional(),
+    pricingType: z.enum([
+      "perPerson",
+      "perDay",
+      "perBooking",
+      "perPersonPerDay",
+    ]).optional(),
     isDefault: z.boolean().optional(),
     allowsQuantity: z.boolean().optional(),
     costsParticipants: z.boolean().optional(),
@@ -169,6 +177,27 @@ export const bookingFinalQuoteSchema = z.object({
     vatPercent: z.number().min(0).max(100).optional(),
     /** Optional override of global transaction charge % for this quote */
     transactionChargePercent: z.number().min(0).max(100).optional(),
+    customItinerary: z
+      .array(
+        z.object({
+          sortOrder: z.number().int().min(0).optional(),
+          title: z.string().min(1),
+          fromLocation: z.string().optional(),
+          toLocation: z.string().optional(),
+          description: z.string().optional(),
+          duration: z.string().optional(),
+          maxAltitude: z.string().optional(),
+          activity: z.string().optional(),
+          meals: z.string().optional(),
+          accommodation: z.string().optional(),
+        }),
+      )
+      .optional(),
+    /**
+     * When true, itinerary PDF itemizes addon fees not covered by package cost.
+     * Pricing totals / amount payable are always included when available.
+     */
+    includeBreakdown: z.boolean().optional(),
   }),
   params: z.object({
     id: z.string().min(1),

@@ -83,6 +83,19 @@ const assertParticipantRulesExclusive = (
   }
 };
 
+const toOptionalDescription = (value: unknown): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.trim();
+};
+
 export type CreatePackageAddonInput = {
   packageId: string;
   addonId: string;
@@ -91,6 +104,7 @@ export type CreatePackageAddonInput = {
   isDefault?: unknown;
   allowsQuantity?: unknown;
   costsParticipants?: unknown;
+  description?: unknown;
   defaultQuantity?: unknown;
   maxQuantity?: unknown;
   isActive?: unknown;
@@ -103,6 +117,7 @@ export type UpdatePackageAddonInput = {
   isDefault?: unknown;
   allowsQuantity?: unknown;
   costsParticipants?: unknown;
+  description?: unknown;
   defaultQuantity?: unknown;
   maxQuantity?: unknown;
   isActive?: unknown;
@@ -122,6 +137,7 @@ class PackageAddonsService {
       isDefault,
       allowsQuantity,
       costsParticipants,
+      description,
       defaultQuantity,
       maxQuantity,
       isActive,
@@ -197,6 +213,7 @@ class PackageAddonsService {
         isDefault: resolvedIsDefault,
         allowsQuantity: resolvedAllowsQuantity,
         costsParticipants: resolvedCostsParticipants,
+        description: toOptionalDescription(description) || undefined,
         defaultQuantity: quantities.defaultQuantity,
         maxQuantity: quantities.maxQuantity,
         isActive: toBoolean(isActive, true),
@@ -266,6 +283,7 @@ class PackageAddonsService {
       isDefault,
       allowsQuantity,
       costsParticipants,
+      description,
       defaultQuantity,
       maxQuantity,
       isActive,
@@ -357,6 +375,12 @@ class PackageAddonsService {
           }),
           ...(costsParticipants !== undefined && {
             costsParticipants: resolvedCostsParticipants,
+          }),
+          ...(description !== undefined && {
+            description: (() => {
+              const resolved = toOptionalDescription(description);
+              return resolved ? resolved : null;
+            })(),
           }),
           defaultQuantity: quantities.defaultQuantity,
           maxQuantity: quantities.maxQuantity,
