@@ -193,6 +193,11 @@ export const bookingFinalQuoteSchema = z.object({
         }),
       )
       .optional(),
+    /**
+     * When true, itinerary PDF itemizes addon fees not covered by package cost.
+     * Pricing totals / amount payable are always included when available.
+     */
+    includeBreakdown: z.boolean().optional(),
   }),
   params: z.object({
     id: z.string().min(1),

@@ -17,6 +17,7 @@ import {
   buildBookingInvoiceData,
   generateBookingInvoicePdf,
 } from "../../invoice";
+import { generateCustomItineraryPdf } from "../../itinerary";
 import {
   MESSAGE_TYPES,
   MessageType,
@@ -186,15 +187,16 @@ async function buildPaymentConfirmationContent(
   return { subject, html, body, attachments };
 }
 
-function buildQuoteSentContent(
+async function buildQuoteSentContent(
   context: Record<string, unknown>,
   channel: NotificationChannel
-): CustomerNotificationContent | null {
+): Promise<CustomerNotificationContent | null> {
   const quoteUrl = context.quoteUrl as string | undefined;
   const bookingReference = context.bookingReference as string | undefined;
   const packageName = (context.packageName as string) || "your trip";
   const recipientName =
     (context.customerName as string) || "Traveler";
+  const bookingId = context.bookingId as string | undefined;
 
   if (!quoteUrl || !bookingReference) return null;
 
@@ -232,10 +234,139 @@ function buildQuoteSentContent(
     bookingReference,
   });
 
+  const attachments: NotificationEmailAttachment[] = [];
+  const includeBreakdown = Boolean(context.includeBreakdown);
+
+  if (bookingId) {
+    try {
+      const booking = await Booking.findById(bookingId)
+        .select(
+          "bookingReference customItinerary arrivalDate departureDate totalPeople currency finalPricing finalSelectedAddons"
+        )
+        .lean();
+
+      const rawDays = booking?.customItinerary;
+      const days = Array.isArray(rawDays)
+        ? rawDays.filter(
+            (day: { title?: string }) =>
+              typeof day?.title === "string" && day.title.trim().length > 0
+          )
+        : [];
+
+      if (booking && days.length > 0) {
+        const pricing = booking.finalPricing;
+        const addonLines = Array.isArray(booking.finalSelectedAddons)
+          ? booking.finalSelectedAddons
+              .filter((line: { name?: string }) => Boolean(line?.name))
+              .map((line: any) => ({
+                name: String(line.name),
+                quantity: Math.max(1, Number(line.quantity) || 1),
+                unitPrice:
+                  line.unitPrice !== undefined
+                    ? Math.max(0, Number(line.unitPrice) || 0)
+                    : undefined,
+                lineTotal: Math.max(0, Number(line.lineTotal) || 0),
+                isDefault: Boolean(line.isDefault),
+                pricingType:
+                  typeof line.pricingType === "string"
+                    ? line.pricingType
+                    : undefined,
+                formula:
+                  typeof line.formula === "string" ? line.formula : undefined,
+                includedFormula:
+                  typeof line.includedFormula === "string"
+                    ? line.includedFormula
+                    : undefined,
+                includedPeopleFromLine: Math.max(
+                  0,
+                  Number(line.includedPeopleFromLine) || 0
+                ),
+                extraPeopleFromLine: Math.max(
+                  0,
+                  Number(line.extraPeopleFromLine) || 0
+                ),
+              }))
+          : [];
+
+        const pdfBuffer = await generateCustomItineraryPdf({
+          bookingReference: booking.bookingReference || bookingReference,
+          packageName,
+          travelerName: recipientName,
+          totalPeople: booking.totalPeople,
+          arrivalDate: booking.arrivalDate,
+          departureDate: booking.departureDate,
+          days: days.map((day: any, index: number) => ({
+            sortOrder:
+              typeof day.sortOrder === "number" ? day.sortOrder : index,
+            title: String(day.title).trim(),
+            fromLocation: day.fromLocation,
+            toLocation: day.toLocation,
+            description: day.description,
+            duration: day.duration,
+            maxAltitude: day.maxAltitude,
+            activity: day.activity,
+            meals: day.meals,
+            accommodation: day.accommodation,
+          })),
+          includeBreakdown,
+          pricing: pricing
+            ? {
+                currency: booking.currency || pricing.currency || "USD",
+                tripDays: pricing.tripDays,
+                totalPeople: pricing.totalPeople ?? booking.totalPeople,
+                basePricePerPerson: pricing.basePricePerPerson,
+                pricePerPerson: pricing.pricePerPerson,
+                packageBase: pricing.packageBase,
+                discountPercent: pricing.discountPercent,
+                addonsTotal: pricing.addonsTotal,
+                participantSurcharge: pricing.participantSurcharge,
+                includedParticipants: pricing.includedParticipants,
+                extraParticipants: pricing.extraParticipants,
+                totalPeopleOnTrip: pricing.totalPeopleOnTrip,
+                subtotal: pricing.subtotal,
+                vatPercent: pricing.vatPercent,
+                vatAmount: pricing.vatAmount,
+                transactionChargePercent: pricing.transactionChargePercent,
+                transactionChargeAmount: pricing.transactionChargeAmount,
+                grandTotal: pricing.grandTotal,
+                amountDueNow: pricing.amountDueNow,
+                addonLines,
+              }
+            : {
+                currency: booking.currency || "USD",
+                totalPeople: booking.totalPeople,
+                addonLines,
+              },
+        });
+
+        if (pdfBuffer?.length) {
+          attachments.push({
+            filename: `FlyEast-Itinerary-${booking.bookingReference || bookingReference}.pdf`,
+            content: pdfBuffer,
+            contentType: "application/pdf",
+          });
+          logger.info(
+            `[customer-notification] Itinerary PDF ${pdfBuffer.length} bytes for ${bookingReference} breakdown=${includeBreakdown}`
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        `[customer-notification] Could not attach itinerary PDF for quote ${bookingReference}: ${err}`
+      );
+    }
+  }
+
+  const attachmentNote =
+    attachments.length > 0
+      ? "\n\nYour day-by-day itinerary PDF is attached."
+      : "";
+
   return {
     subject,
     html,
-    body: `Hi ${recipientName},\n\nYour quote for ${packageName} is ready.\nReference: ${bookingReference}\nView quote: ${quoteUrl}`,
+    body: `Hi ${recipientName},\n\nYour quote for ${packageName} is ready.\nReference: ${bookingReference}\nView quote: ${quoteUrl}${attachmentNote}`,
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
 }
 

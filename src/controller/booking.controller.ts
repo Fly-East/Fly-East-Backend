@@ -1358,6 +1358,7 @@ const finalizeQuote = async (req: Request, res: Response) => {
           customerEmail: person.email,
           customerName: person.fullName,
           customerPhone: person.phoneNumber,
+          includeBreakdown: Boolean(req.body?.includeBreakdown),
         });
       }
     } catch (emailError) {
