@@ -128,7 +128,7 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 
 # CORS
-ALLOWED_ORIGINS=https://flyeast.webxnepal.com
+ALLOWED_ORIGINS=https://flyeastnepal.com
 
 # Cloudinary (Media Storage)
 CLOUDINARY_CLOUD_NAME=your_cloud_name
@@ -149,7 +149,7 @@ MAIL_PASS=your_password
 STRIPE_SECRET_KEY=sk_test_...
 
 # Client
-CLIENT_URL=https://flyeast.webxnepal.com
+CLIENT_URL=https://flyeastnepal.com
 ```
 
 ---
@@ -1088,5 +1088,4 @@ The application uses Pino for structured logging:
 
 **Documentation Version:** 1.0  
 **Last Updated:** November 2025  
-**Author:** WebX Nepal  
 **Contact:** flyeast2025@outlook.com
