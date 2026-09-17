@@ -509,8 +509,6 @@ export function renderInvoiceTemplate(data: InvoiceTemplateData): string {
                 </table>
             </div>
         </div>
-
-        <p style="font-size: 14px; background-color: #11182720; text-align: center;">Powered by <a href="https://webxnepal.com">WebxNepal</a></p>
     </div>
 </body>
 
