@@ -14,11 +14,19 @@ export interface DetailedItineraryDocument extends Document {
   pdf: DetailedItineraryPdf;
 }
 
+export type DetailedItineraryRequestStatus =
+  | "pending"
+  | "sent"
+  | "rejected";
+
 export interface DetailedItineraryRequestDocument extends Document {
   detailedItinerary: Types.ObjectId;
   package?: Types.ObjectId;
   email: string;
   pdfFilename: string;
   pdfUrl?: string;
-  sentAt: Date;
+  status: DetailedItineraryRequestStatus;
+  sentAt?: Date;
+  reviewedAt?: Date;
+  rejectionReason?: string;
 }

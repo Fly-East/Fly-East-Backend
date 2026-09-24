@@ -41,22 +41,22 @@ export const getDetailedItineraryPackageSchema = z.object({
 
 export const getDetailedItineraryRequestsSchema = z.object({
   query: z.object({
-    page: z
-      .coerce
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .default(1),
-    limit: z
-      .coerce
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .default(20),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+    status: z.enum(["pending", "sent", "rejected"]).optional(),
   }),
+});
+
+export const approveDetailedItineraryRequestSchema = idParamsSchema;
+
+export const rejectDetailedItineraryRequestSchema = z.object({
+  params: idParamsSchema.shape.params,
+  body: z
+    .object({
+      rejectionReason: z.string().trim().max(500).optional(),
+    })
+    .optional()
+    .default({}),
 });
 
 export type CreateDetailedItineraryInput = z.infer<
@@ -77,3 +77,9 @@ export type GetDetailedItineraryPackageInput = z.infer<
 export type GetDetailedItineraryRequestsInput = z.infer<
   typeof getDetailedItineraryRequestsSchema
 >["query"];
+export type ApproveDetailedItineraryRequestInput = z.infer<
+  typeof approveDetailedItineraryRequestSchema
+>["params"];
+export type RejectDetailedItineraryRequestInput = z.infer<
+  typeof rejectDetailedItineraryRequestSchema
+>;

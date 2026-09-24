@@ -15,6 +15,28 @@ import {
   RequestDetailedItineraryInput,
   UpdateDetailedItineraryInput,
 } from "../schema/detailedItinerary.schema";
+import {
+  uploadOnCloudinary,
+  deleteImage,
+  downloadCloudinaryAsset,
+} from "../utils/cloudinary";
+import { clearCacheByPrefix } from "../utils/redis";
+import { revalidateFrontendDetailedItineraries } from "../utils/revalidateFrontend";
+
+let legacyRequestStatusMigrated = false;
+
+async function migrateLegacyRequestStatuses() {
+  if (legacyRequestStatusMigrated) return;
+  try {
+    await DetailedItineraryRequest.updateMany(
+      { status: { $exists: false }, sentAt: { $exists: true, $ne: null } },
+      { $set: { status: "sent" } }
+    );
+    legacyRequestStatusMigrated = true;
+  } catch (error) {
+    logger.warn("Failed to migrate legacy itinerary request statuses:", error);
+  }
+}
 
 const isPopulatedPackage = (
   value: any
@@ -30,13 +52,6 @@ const isPopulatedPackage = (
     Object.prototype.hasOwnProperty.call(value, "_id")
   );
 };
-import {
-  uploadOnCloudinary,
-  deleteImage,
-  downloadCloudinaryAsset,
-} from "../utils/cloudinary";
-import { clearCacheByPrefix } from "../utils/redis";
-import { revalidateFrontendDetailedItineraries } from "../utils/revalidateFrontend";
 
 const buildPayload = (doc: any) => ({
   id: doc._id,
@@ -377,16 +392,23 @@ export const listDetailedItineraryRequests = async (
   res: Response
 ) => {
   try {
+    await migrateLegacyRequestStatuses();
+
     const query = req.query as unknown as GetDetailedItineraryRequestsInput;
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
+    const filter: Record<string, unknown> = {};
+    if (query.status) {
+      filter.status = query.status;
+    }
+
     const [total, records] = await Promise.all([
-      DetailedItineraryRequest.countDocuments(),
-      DetailedItineraryRequest.find()
+      DetailedItineraryRequest.countDocuments(filter),
+      DetailedItineraryRequest.find(filter)
         .populate("package", "name slug coverImage")
-        .sort({ sentAt: -1 })
+        .sort({ createdAt: -1, sentAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -408,7 +430,12 @@ export const listDetailedItineraryRequests = async (
         email: rec.email,
         pdfFilename: rec.pdfFilename,
         pdfUrl: rec.pdfUrl,
+        status: rec.status ?? (rec.sentAt ? "sent" : "pending"),
         sentAt: rec.sentAt,
+        reviewedAt: rec.reviewedAt,
+        rejectionReason: rec.rejectionReason,
+        createdAt: (rec as any).createdAt,
+        updatedAt: (rec as any).updatedAt,
       };
     });
     const uniqueEmailCount = new Set(records.map((rec) => rec.email)).size;
@@ -457,12 +484,81 @@ export const requestDetailedItinerary = async (req: Request, res: Response) => {
       });
     }
 
+    const request = await DetailedItineraryRequest.create({
+      detailedItinerary: detail._id,
+      package: detail.package?._id,
+      email,
+      pdfFilename: detail.pdf.filename,
+      pdfUrl: detail.pdf.url,
+      status: "pending",
+    });
+
+    return res.status(201).json({
+      status: "success",
+      message:
+        "Your request has been received. We will email the itinerary after review.",
+      data: {
+        id: request._id,
+        status: request.status,
+      },
+    });
+  } catch (error: any) {
+    logger.error("Request detailed itinerary failed:", error);
+    return res.status(500).json({
+      status: "error",
+      message: error.message || "Failed to submit detailed itinerary request",
+    });
+  }
+};
+
+export const approveDetailedItineraryRequest = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid request ID",
+      });
+    }
+
+    const requestDoc = await DetailedItineraryRequest.findById(id);
+    if (!requestDoc) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Itinerary request not found",
+      });
+    }
+
+    if (requestDoc.status !== "pending") {
+      return res.status(400).json({
+        status: "fail",
+        message: `Request is already ${requestDoc.status}`,
+      });
+    }
+
+    const detail = (await DetailedItinerary.findById(
+      requestDoc.detailedItinerary
+    )
+      .populate("package", "name slug coverImage")
+      .lean()) as any;
+
+    if (!detail) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Detailed itinerary not found for this request",
+      });
+    }
+
     const packageName = detail.package?.name ?? "";
     const subject = "Detailed itinerary request";
     const html = detailedItineraryTemplate({ packageName });
     const text = "Attached is the detailed itinerary you requested.";
-    let attachments;
 
+    let attachments;
     try {
       const pdfBuffer = await downloadCloudinaryAsset({
         url: detail.pdf.url,
@@ -484,29 +580,93 @@ export const requestDetailedItinerary = async (req: Request, res: Response) => {
       });
     }
 
-    await sendEmail([email], subject, html, {
+    await sendEmail([requestDoc.email], subject, html, {
       text,
       attachments,
     });
 
-    await DetailedItineraryRequest.create({
-      detailedItinerary: detail._id,
-      package: detail.package?._id,
-      email,
-      pdfFilename: detail.pdf.filename,
-      pdfUrl: detail.pdf.url,
-      sentAt: new Date(),
-    });
+    const now = new Date();
+    requestDoc.status = "sent";
+    requestDoc.sentAt = now;
+    requestDoc.reviewedAt = now;
+    requestDoc.pdfFilename = detail.pdf.filename;
+    requestDoc.pdfUrl = detail.pdf.url;
+    await requestDoc.save();
 
     return res.status(200).json({
       status: "success",
-      message: "Detailed itinerary sent to your email",
+      message: "Detailed itinerary emailed successfully",
+      data: {
+        id: requestDoc._id,
+        status: requestDoc.status,
+        sentAt: requestDoc.sentAt,
+        reviewedAt: requestDoc.reviewedAt,
+      },
     });
   } catch (error: any) {
-    logger.error("Request detailed itinerary failed:", error);
+    logger.error("Approve detailed itinerary request failed:", error);
     return res.status(500).json({
       status: "error",
-      message: error.message || "Failed to send detailed itinerary",
+      message: error.message || "Failed to approve itinerary request",
+    });
+  }
+};
+
+export const rejectDetailedItineraryRequest = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { id } = req.params;
+    const rejectionReason =
+      typeof req.body?.rejectionReason === "string"
+        ? req.body.rejectionReason.trim()
+        : undefined;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid request ID",
+      });
+    }
+
+    const requestDoc = await DetailedItineraryRequest.findById(id);
+    if (!requestDoc) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Itinerary request not found",
+      });
+    }
+
+    if (requestDoc.status !== "pending") {
+      return res.status(400).json({
+        status: "fail",
+        message: `Request is already ${requestDoc.status}`,
+      });
+    }
+
+    requestDoc.status = "rejected";
+    requestDoc.reviewedAt = new Date();
+    if (rejectionReason) {
+      requestDoc.rejectionReason = rejectionReason;
+    }
+    await requestDoc.save();
+
+    return res.status(200).json({
+      status: "success",
+      message: "Itinerary request rejected",
+      data: {
+        id: requestDoc._id,
+        status: requestDoc.status,
+        reviewedAt: requestDoc.reviewedAt,
+        rejectionReason: requestDoc.rejectionReason,
+      },
+    });
+  } catch (error: any) {
+    logger.error("Reject detailed itinerary request failed:", error);
+    return res.status(500).json({
+      status: "error",
+      message: error.message || "Failed to reject itinerary request",
     });
   }
 };
