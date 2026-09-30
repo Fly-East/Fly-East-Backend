@@ -118,6 +118,16 @@ export const listTravelerScansSchema = z.object({
     page: z.coerce.number().int().min(1).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
     status: z.enum(TRAVELER_SCAN_STATUSES).optional(),
+    nationality: z.string().optional(),
+    trekkingRegion: z.string().optional(),
+    trekkingRoute: z.string().optional(),
+    gender: z.string().optional(),
+    insuranceCompany: z.string().optional(),
+    createdFrom: optionalDateString,
+    createdTo: optionalDateString,
+    departureFrom: optionalDateString,
+    departureTo: optionalDateString,
+    hasDocuments: z.enum(["true", "false"]).optional(),
   }),
 });
 

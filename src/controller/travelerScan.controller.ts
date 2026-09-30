@@ -9,6 +9,10 @@ import TravelerScan, {
 } from "../models/travelerScan.model";
 import logger from "../utils/logger";
 import { deleteImage } from "../utils/cloudinary";
+import {
+  fuzzySearchRecords,
+  parseSearchQuery,
+} from "../utils/travelerScanSearch";
 
 const CLOUDINARY_FOLDER = "traveler-scans";
 
@@ -186,6 +190,62 @@ function identityFromBody(body: Record<string, any>) {
   };
 }
 
+/** Upper bound on records scored in memory per fuzzy search request. */
+const SEARCH_CANDIDATE_CAP = 5000;
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function equalsIgnoreCase(value: string) {
+  return { $regex: `^${escapeRegex(value.trim())}$`, $options: "i" };
+}
+
+function dateRange(from?: unknown, to?: unknown) {
+  const range: Record<string, Date> = {};
+  const start = parseOptionalDate(from ? String(from) : undefined);
+  const end = parseOptionalDate(to ? String(to) : undefined);
+  if (start) range.$gte = start;
+  if (end) {
+    end.setUTCHours(23, 59, 59, 999);
+    range.$lte = end;
+  }
+  return Object.keys(range).length ? range : undefined;
+}
+
+function buildListFilter(query: Record<string, unknown>) {
+  const filter: Record<string, unknown> = {};
+  const str = (key: string) => {
+    const v = query[key];
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  };
+
+  const status = str("status");
+  if (status) filter.status = status;
+
+  for (const key of [
+    "nationality",
+    "trekkingRegion",
+    "trekkingRoute",
+    "gender",
+    "insuranceCompany",
+  ]) {
+    const v = str(key);
+    if (v) filter[key] = equalsIgnoreCase(v);
+  }
+
+  const created = dateRange(query.createdFrom, query.createdTo);
+  if (created) filter.createdAt = created;
+  const departure = dateRange(query.departureFrom, query.departureTo);
+  if (departure) filter.departureDate = departure;
+
+  const hasDocuments = str("hasDocuments");
+  if (hasDocuments === "true") filter["documents.0"] = { $exists: true };
+  if (hasDocuments === "false") filter["documents.0"] = { $exists: false };
+
+  return filter;
+}
+
 export const listTravelerScans = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
@@ -197,23 +257,35 @@ export const listTravelerScans = async (req: Request, res: Response) => {
     );
     const skip = (page - 1) * limit;
     const q = String(req.query.q || "").trim();
-    const status = req.query.status as string | undefined;
+    const filter = buildListFilter(req.query as Record<string, unknown>);
 
-    const filter: Record<string, unknown> = {};
-    if (status) filter.status = status;
     if (q) {
-      filter.$or = [
-        { fullName: { $regex: q, $options: "i" } },
-        { firstName: { $regex: q, $options: "i" } },
-        { lastName: { $regex: q, $options: "i" } },
-        { passportNumber: { $regex: q, $options: "i" } },
-        { idNumber: { $regex: q, $options: "i" } },
-        { email: { $regex: q, $options: "i" } },
-        { nationality: { $regex: q, $options: "i" } },
-        { surname: { $regex: q, $options: "i" } },
-        { givenNames: { $regex: q, $options: "i" } },
-        { trekkingArea: { $regex: q, $options: "i" } },
-      ];
+      const tokens = parseSearchQuery(q);
+      const candidates = await TravelerScan.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(SEARCH_CANDIDATE_CAP)
+        .lean();
+      const hits = fuzzySearchRecords(candidates as Record<string, any>[], tokens);
+      const total = hits.length;
+      const totalPages = Math.ceil(total / limit) || 1;
+      const pageHits = hits.slice(skip, skip + limit);
+      return res.status(200).json({
+        success: true,
+        data: pageHits.map((h) => ({
+          ...h.record,
+          searchScore: Math.round(h.score),
+          matchedFields: h.matchedFields,
+        })),
+        pagination: {
+          count: pageHits.length,
+          total,
+          page,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
+        },
+        searchTruncated: candidates.length >= SEARCH_CANDIDATE_CAP,
+      });
     }
 
     const [items, total] = await Promise.all([
