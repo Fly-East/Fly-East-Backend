@@ -192,10 +192,19 @@ This document describes every major API interaction, the payload that you must s
 - `POST /api/v1/home-testimonial` – simplified hero testimonial: `{ name, quote, image?, sortOrder? }`.
 - `POST /api/v1/faq/:packageId` _(admin)_: `{ question (required), answer (required), sortOrder? }`.
 - `GET /api/v1/faq`, `/api/v1/faq/:id`, `/api/v1/faq/package/:packageId`.
-- `POST/PUT/DELETE` analogously exist for `homefaq`, `trip-highlights`, `visit-places`, `why-love`, `attraction`, `packageinfo`, `inclusion`, `exclusion`, `requirement`, `important-notice`, `useful-Info`, `insurance`, `certificate`, `season-info`, `teamMember`. Each expects:
+- `POST/PUT/DELETE` analogously exist for `homefaq`, `trip-highlights`, `visit-places`, `why-love`, `attraction`, `packageinfo`, `inclusion`, `exclusion`, `requirement`, `important-notice`, `useful-Info`, `insurance`, `season-info`, `teamMember`. Each expects:
   - `title`/`question`/`description` etc depending on resource.
   - `sortOrder` optional number.
   - `image` optional URL or file when marked.
+
+### Certificates
+Fields: `name` (required, max 200), `description` (required, max 2000), `image` (Cloudinary URL), `imagePublicId`, `isActive` (default `true`), `sortOrder` (ascending, 0 first). Only `certificates:*` cache keys are cleared on writes.
+- `GET /api/v1/certificate` – list sorted by `sortOrder` ascending. Query: `page`, `limit` (default 100), `isActive=true|false` (omit for all; the public site sends `true`). Returns `200` with `data: []` when empty.
+- `GET /api/v1/certificate/:id` – single certificate, `{ status, data }`. `400` on invalid id, `404` if missing.
+- `POST /api/v1/certificate` _(admin, `create`)_: multipart `name`, `description`, optional `image` file (jpeg/png/webp, max 5MB), `isActive` (`"true"`/`"false"`), `sortOrder` (defaults to max + 1).
+- `PUT /api/v1/certificate/:id` _(admin, `edit`)_: multipart, every field optional; only sent fields change. A new `image` replaces the old one and deletes it from Cloudinary. `removeImage=true` clears the image.
+- `PUT /api/v1/certificate/reorder` _(admin, `edit`)_: JSON `{ certificates: [{ id, sortOrder }] }`, applied in one bulk write.
+- `DELETE /api/v1/certificate/:id` _(admin, `delete`)_ – deletes the certificate and its Cloudinary image.
 
 ### Image Management
 - `POST /api/v1/images/upload` _(admin)_: single `image` file + optional `{ altText, tags (comma separated) }`. Response includes `url`, `publicId`, `width`, `height`, `format`.
