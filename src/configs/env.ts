@@ -59,6 +59,8 @@ export const FRONTEND_BASE_URL =
   read("CLIENT_URL") ||
   "";
 export const ADMIN_FRONTEND_BASE_URL = read("ADMIN_FRONTEND_BASE_URL");
+/** treks.flyeastnepal.com (treks-portal). Reachable origin for on-demand ISR. */
+export const TREKS_PORTAL_URL = read("TREKS_PORTAL_URL");
 // Origin of this API server — used to build self-referencing URLs (e.g. webhooks)
 export const SELF_ORIGIN = readString("SELF_ORIGIN", `http://localhost:${readNumber("PORT", 5000)}`);
 
