@@ -78,7 +78,6 @@ import Testimonial from "../models/testimonial.model";
 import Faq from "../models/faq.model";
 import { Pax } from "../models/pax.model";
 import logger from "../utils/logger";
-import { revalidateFrontendPackage } from "../utils/revalidateFrontend";
 import TripHighlight from "../models/triphighlights";
 import VisitPlace from "../models/visit-place.model";
 import Requirement from "../models/requirement.mode";
@@ -293,20 +292,6 @@ const invalidatePackageCaches = async () => {
 
 const detailCacheKey = (idOrSlug: string) => `packages:detail:${idOrSlug}`;
 
-const getPackageRevalidatePayload = (pkg: any, oldSlug?: string) => {
-  const categoryId = pkg.categoryId?._id ?? pkg.categoryId;
-  const subCategoryId = pkg.subCategoryId?._id ?? pkg.subCategoryId;
-  return {
-    slug: pkg.slug,
-    oldSlug,
-    packageId: pkg._id?.toString(),
-    categorySlug: pkg.categoryId?.slug,
-    subCategoryId: subCategoryId?.toString(),
-    subCategorySlug: pkg.subCategoryId?.slug,
-    categoryId: categoryId?.toString(),
-  };
-};
-
 export const createPackage = async (req: Request, res: Response) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -486,7 +471,6 @@ export const createPackage = async (req: Request, res: Response) => {
 
     // --- Clear Cache ---
     await invalidatePackageCaches();
-    revalidateFrontendPackage(getPackageRevalidatePayload(populatedPackage));
     res.status(201).json({
       status: "success",
       message: "Package created successfully",
@@ -731,8 +715,6 @@ export const updatePackage = async (req: Request, res: Response) => {
       });
     }
 
-    const oldSlug = existingPackage.slug;
-
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
     const updateData: any = {};
 
@@ -935,12 +917,6 @@ export const updatePackage = async (req: Request, res: Response) => {
 
     // Invalidate package caches
     await invalidatePackageCaches();
-    revalidateFrontendPackage(
-      getPackageRevalidatePayload(
-        populatedPackage,
-        oldSlug !== populatedPackage.slug ? oldSlug : undefined
-      )
-    );
     res.status(200).json({
       status: "success",
       data: populatedPackage,
@@ -979,8 +955,6 @@ export const deletePackage = async (req: Request, res: Response) => {
         message: "Package not found",
       });
     }
-
-    const populatedForRevalidate = await populatePackage(packageToDelete);
 
     // Get gallery images to delete
     const galleryImages = await Gallery.find({
@@ -1062,9 +1036,6 @@ export const deletePackage = async (req: Request, res: Response) => {
     await Package.findByIdAndDelete(req.params.id).session(session);
     await session.commitTransaction();
     await invalidatePackageCaches();
-    revalidateFrontendPackage(
-      getPackageRevalidatePayload(populatedForRevalidate)
-    );
     res.status(204).json({
       status: "success",
       message:
@@ -1486,7 +1457,6 @@ export const updatePackageCategory = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
     await invalidatePackageCaches();
-    revalidateFrontendPackage(getPackageRevalidatePayload(updatedPackage));
     res.status(200).json({
       status: "success",
       message: "Package category and subcategory updated successfully",

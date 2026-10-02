@@ -19,7 +19,7 @@ import connectDB from "./utils/connectDB";
 import UserModel from "./models/user.model";
 import rateLimiter from "./middleware/rateLimiter";
 import { sanitizeHtmlMiddleware } from "./middleware/sanitizeHtml.middleware";
-import { revalidateTreksPortalMiddleware } from "./middleware/revalidateTreksPortal.middleware";
+import { revalidateSitesMiddleware } from "./middleware/revalidateSites.middleware";
 import { SocketController } from "./socket/socket";
 import { connectRedis, clearCacheByPrefix } from "./utils/redis";
 import { FixedDateExpiryCron } from "./cron/fixedDateCron";
@@ -250,7 +250,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use(rateLimiter);
-app.use(revalidateTreksPortalMiddleware);
+app.use(revalidateSitesMiddleware);
 FixedDateExpiryCron.start();
 EmailWorker.start();
 NotificationWorker.start();

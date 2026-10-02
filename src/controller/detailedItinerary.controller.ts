@@ -21,7 +21,6 @@ import {
   downloadCloudinaryAsset,
 } from "../utils/cloudinary";
 import { clearCacheByPrefix } from "../utils/redis";
-import { revalidateFrontendDetailedItineraries } from "../utils/revalidateFrontend";
 
 let legacyRequestStatusMigrated = false;
 
@@ -124,7 +123,6 @@ export const createDetailedItinerary = async (req: Request, res: Response) => {
       existing.pdf = pdfPayload;
       await existing.save();
       await clearCacheByPrefix("");
-      revalidateFrontendDetailedItineraries();
       return res.status(200).json({
         status: "success",
         message: "Detailed itinerary replaced",
@@ -137,7 +135,6 @@ export const createDetailedItinerary = async (req: Request, res: Response) => {
       pdf: pdfPayload,
     });
     await clearCacheByPrefix("");
-    revalidateFrontendDetailedItineraries();
     return res.status(201).json({
       status: "success",
       message: "Detailed itinerary saved",
@@ -217,7 +214,6 @@ export const updateDetailedItinerary = async (req: Request, res: Response) => {
 
     await detail.save();
     await clearCacheByPrefix("");
-    revalidateFrontendDetailedItineraries();
     return res.status(200).json({
       status: "success",
       message: "Detailed itinerary updated",
@@ -255,7 +251,6 @@ export const deleteDetailedItinerary = async (req: Request, res: Response) => {
       detailedItinerary: deleted._id,
     });
     await clearCacheByPrefix("");
-    revalidateFrontendDetailedItineraries();
     return res.status(200).json({
       status: "success",
       message: "Detailed itinerary deleted",

@@ -3,8 +3,6 @@ import mongoose from "mongoose";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
 import { deleteImage, uploadOnCloudinary } from "../utils/cloudinary";
 import logger from "../utils/logger";
-import { revalidateFrontendCertificates } from "../utils/revalidateFrontend";
-
 import { Certificate } from "../models/certificate.model";
 
 interface CertificateCache {
@@ -108,7 +106,6 @@ export const createCertificate = async (req: Request, res: Response) => {
     });
 
     await clearCacheByPrefix(CACHE_PREFIX);
-    revalidateFrontendCertificates();
     res.status(201).json(certificate);
   } catch (error) {
     logger.error("Error creating certificate:", error);
@@ -183,7 +180,6 @@ export const updateCertificate = async (req: Request, res: Response) => {
     await safeDeleteImage(oldImagePublicId);
 
     await clearCacheByPrefix(CACHE_PREFIX);
-    revalidateFrontendCertificates();
     res.json(certificate);
   } catch (error) {
     logger.error("Error updating certificate:", error);
@@ -226,7 +222,6 @@ export const reorderCertificates = async (req: Request, res: Response) => {
     );
 
     await clearCacheByPrefix(CACHE_PREFIX);
-    revalidateFrontendCertificates();
     res.status(200).json({ message: "Certificates reordered successfully" });
   } catch (error) {
     logger.error("Error reordering certificates:", error);
@@ -250,7 +245,6 @@ export const deleteCertificate = async (req: Request, res: Response) => {
     await safeDeleteImage(certificate.imagePublicId);
 
     await clearCacheByPrefix(CACHE_PREFIX);
-    revalidateFrontendCertificates();
     res.status(200).json({ message: "Certificate deleted successfully" });
   } catch (error) {
     logger.error("Error deleting certificate:", error);
