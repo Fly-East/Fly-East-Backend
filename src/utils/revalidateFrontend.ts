@@ -1,8 +1,53 @@
 import {
   FRONTEND_BASE_URL,
   REVALIDATE_SECRET,
+  TREKS_PORTAL_URL,
 } from "../configs/env";
 import logger from "./logger";
+
+const TREKS_PORTAL_DEBOUNCE_MS = 3000;
+let treksPortalTimer: NodeJS.Timeout | null = null;
+const treksPortalReasons = new Set<string>();
+
+/**
+ * Ask the treks portal to drop its cached catalogue and regenerate pages.
+ * Debounced: one admin save fans out into many requests (package, itinerary
+ * days, FAQs, ...), which collapse into a single revalidation.
+ * Fire-and-forget — never blocks the admin API response.
+ */
+export function revalidateTreksPortal(reason: string): void {
+  const base = TREKS_PORTAL_URL?.replace(/\/$/, "");
+  if (!base || !REVALIDATE_SECRET) return;
+
+  treksPortalReasons.add(reason);
+  if (treksPortalTimer) clearTimeout(treksPortalTimer);
+
+  treksPortalTimer = setTimeout(() => {
+    treksPortalTimer = null;
+    const reasons = [...treksPortalReasons].join(", ");
+    treksPortalReasons.clear();
+
+    void fetch(`${base}/api/revalidate`, {
+      method: "POST",
+      headers: {
+        "x-revalidate-secret": REVALIDATE_SECRET as string,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(10_000),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          logger.warn(`[revalidate] Treks portal returned ${res.status}: ${body}`);
+          return;
+        }
+        logger.info(`[revalidate] Treks portal refreshed (${reasons})`);
+      })
+      .catch((err) => {
+        logger.warn(`[revalidate] Failed to reach treks portal: ${err}`);
+      });
+  }, TREKS_PORTAL_DEBOUNCE_MS);
+}
 
 export type PackageRevalidatePayload = {
   slug?: string;
