@@ -13,6 +13,7 @@ import {
   PackageInfo,
 } from "../models";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
+import { parseDurationDays } from "../service/guideSchedule.service";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;
@@ -268,6 +269,7 @@ const buildPackageSummary = async (packageDoc: PackageDocument) => {
     coverImage: packageDoc.coverImage,
     difficulty: packageDoc.difficulty || "",
     duration: packageDoc.duration,
+    durationDays: packageDoc.durationDays,
     location: packageDoc.location || "",
     elevation: packageDoc.elevation || 0,
     distance: packageDoc.distance || 0,
@@ -441,6 +443,9 @@ export const createPackage = async (req: Request, res: Response) => {
       overview,
       location,
       duration,
+      durationDays:
+        parseDurationDays(Number(req.body.durationDays) || undefined) ??
+        parseDurationDays(duration),
       note,
       addToHome: normalizedAddToHome,
       isPopular: normalizedIsPopular,
@@ -772,6 +777,16 @@ export const updatePackage = async (req: Request, res: Response) => {
 
     if (req.body.packageType !== undefined) {
       updateData.packageType = normalizePackageType(req.body.packageType);
+    }
+
+    const explicitDurationDays = parseDurationDays(
+      Number(req.body.durationDays) || undefined
+    );
+    if (explicitDurationDays) {
+      updateData.durationDays = explicitDurationDays;
+    } else if (req.body.duration !== undefined) {
+      const parsedDays = parseDurationDays(req.body.duration);
+      if (parsedDays) updateData.durationDays = parsedDays;
     }
 
     if (req.body.season !== undefined) {

@@ -55,6 +55,7 @@ const basePackageSchema = {
   overview: z.string().min(10, "Overview must be at least 10 characters"),
   location: z.string().min(1, "Location is required"),
   duration: z.string().min(1, "Duration is required"),
+  durationDays: z.coerce.number().int().min(1).optional(),
   slug: z.string().optional(),
   sortOrder: z.coerce.number().min(0).optional(),
   elevation: z.coerce

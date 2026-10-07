@@ -7,7 +7,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
-    "build:start": "tsc && node dist/app.js"
+    "build:start": "tsc && node dist/app.js",
+    "backfill:guides": "ts-node-dev --transpile-only src/scripts/backfill-guides.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^3.4.4",

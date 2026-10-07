@@ -13,8 +13,21 @@ import {
   fuzzySearchRecords,
   parseSearchQuery,
 } from "../utils/travelerScanSearch";
+import {
+  resolveScanEndDate,
+  unassignGuideFromScan,
+} from "../service/guideSchedule.service";
 
 const CLOUDINARY_FOLDER = "traveler-scans";
+
+const GUIDE_ASSIGNMENT_POPULATE = [
+  {
+    path: "guideAssignment",
+    select: "member startDate endDate status travelerScans shareKey",
+    populate: { path: "member", select: "name image" },
+  },
+  { path: "package", select: "name duration durationDays" },
+];
 
 type Base64ImageInput = {
   data: string;
@@ -178,6 +191,9 @@ function identityFromBody(body: Record<string, any>) {
     trekkingRoute: body.trekkingRoute,
     bookingDate: parseOptionalDate(body.bookingDate),
     departureDate: parseOptionalDate(body.departureDate),
+    endDate: parseOptionalDate(body.endDate),
+    endDateSource: body.endDateSource,
+    package: body.package === "" ? null : body.package,
     insurancePolicyNumber: body.insurancePolicyNumber,
     insuranceCompany: body.insuranceCompany,
     insuranceCompanyOther: body.insuranceCompanyOther,
@@ -269,6 +285,10 @@ export const listTravelerScans = async (req: Request, res: Response) => {
       const total = hits.length;
       const totalPages = Math.ceil(total / limit) || 1;
       const pageHits = hits.slice(skip, skip + limit);
+      await TravelerScan.populate(
+        pageHits.map((h) => h.record),
+        GUIDE_ASSIGNMENT_POPULATE
+      );
       return res.status(200).json({
         success: true,
         data: pageHits.map((h) => ({
@@ -293,6 +313,7 @@ export const listTravelerScans = async (req: Request, res: Response) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
+        .populate(GUIDE_ASSIGNMENT_POPULATE)
         .lean(),
       TravelerScan.countDocuments(filter),
     ]);
@@ -326,7 +347,9 @@ export const getTravelerScanById = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
-    const item = await TravelerScan.findById(id).lean();
+    const item = await TravelerScan.findById(id)
+      .populate(GUIDE_ASSIGNMENT_POPULATE)
+      .lean();
     if (!item) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -367,6 +390,16 @@ export const createTravelerScan = async (req: Request, res: Response) => {
       deviceModel: body.deviceModel || "X-Mini 2000",
     });
 
+    if (identity.endDate) {
+      identity.endDateSource = identity.endDateSource || "manual";
+    } else {
+      const calculated = await resolveScanEndDate(identity);
+      if (calculated) {
+        identity.endDate = calculated;
+        identity.endDateSource = "calculated";
+      }
+    }
+
     const created = await TravelerScan.create({
       ...identity,
       status: identity.status || "draft",
@@ -392,17 +425,49 @@ export const updateTravelerScan = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
 
-    const identity = identityFromBody(req.body || {});
+    const body = req.body || {};
+    const identity = identityFromBody(body);
     const update: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(identity)) {
       if (value !== undefined) update[key] = value;
     }
+    const unset: Record<string, 1> = {};
+
+    if (body.endDate === "") {
+      unset.endDate = 1;
+      unset.endDateSource = 1;
+      delete update.endDateSource;
+    } else if (update.endDate) {
+      update.endDateSource = update.endDateSource || "manual";
+    } else if (body.departureDate !== undefined || body.package !== undefined) {
+      const existing = await TravelerScan.findById(id)
+        .select("departureDate package endDate endDateSource")
+        .lean<{
+          departureDate?: Date;
+          package?: mongoose.Types.ObjectId;
+          endDate?: Date;
+          endDateSource?: string;
+        }>();
+      if (existing && (existing.endDateSource !== "manual" || !existing.endDate)) {
+        const calculated = await resolveScanEndDate({
+          departureDate: (update.departureDate as Date) ?? existing.departureDate,
+          package:
+            body.package !== undefined
+              ? (update.package as mongoose.Types.ObjectId | null)
+              : existing.package,
+        });
+        if (calculated) {
+          update.endDate = calculated;
+          update.endDateSource = "calculated";
+        }
+      }
+    }
 
     const updated = await TravelerScan.findByIdAndUpdate(
       id,
-      { $set: update },
+      Object.keys(unset).length ? { $set: update, $unset: unset } : { $set: update },
       { new: true, runValidators: true }
-    );
+    ).populate(GUIDE_ASSIGNMENT_POPULATE);
     if (!updated) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -533,6 +598,9 @@ export const deleteTravelerScan = async (req: Request, res: Response) => {
       }
     }
 
+    if (record.guideAssignment) {
+      await unassignGuideFromScan(id);
+    }
     await TravelerScan.findByIdAndDelete(id);
     return res.status(200).json({
       success: true,
