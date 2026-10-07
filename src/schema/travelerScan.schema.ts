@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  END_DATE_SOURCES,
   INSURANCE_COMPANIES,
   TRAVELER_DOCUMENT_KINDS,
   TRAVELER_DOCUMENT_SOURCES,
@@ -60,6 +61,13 @@ const identityFields = {
   trekkingRoute: optionalTrimmed,
   bookingDate: optionalDateString,
   departureDate: optionalDateString,
+  endDate: optionalDateString.or(z.literal("")),
+  endDateSource: z.enum(END_DATE_SOURCES).optional(),
+  package: z
+    .string()
+    .regex(/^[a-f\d]{24}$/i, "Invalid package id")
+    .or(z.literal(""))
+    .optional(),
   insurancePolicyNumber: optionalTrimmed,
   insuranceCompany: z
     .enum(INSURANCE_COMPANIES)

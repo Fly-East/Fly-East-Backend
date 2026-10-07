@@ -61,6 +61,7 @@ import imageRoute from "./routes/image.route";
 import NotifiRoute from "./routes/seenNotification";
 import galleryRoute from "./routes/gallery.route";
 import travelerScanRoute from "./routes/travelerScan.route";
+import guideRoute from "./routes/guide.route";
 import packageInfoRoute from "./routes/packageInfo.route";
 import searchRoute from "./routes/search.routes";
 import customBookingRoute from "./routes/customBooking.route";
@@ -294,6 +295,7 @@ app.use(
   imageRoute,
   galleryRoute,
   travelerScanRoute,
+  guideRoute,
   popularRoute,
   statsRoute,
   trackVisitRouter,

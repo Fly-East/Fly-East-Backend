@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
-import Member, { IMember } from "../models/team-member.model";
+import Member, {
+  FIELD_ROLES,
+  FieldRole,
+  IMember,
+} from "../models/team-member.model";
 import { Request, Response } from "express";
 import { uploadOnCloudinary } from "../utils/cloudinary";
 import { RequestHandler } from "express";
@@ -66,6 +70,30 @@ const normalizeStringField = (value: unknown): string | undefined => {
     return normalizeStringField(value[0]);
   }
   return undefined;
+};
+
+// Accepts JSON string, comma list, single value or repeated form-data keys
+const parseFieldRoles = (value: unknown): FieldRole[] | undefined => {
+  if (value === undefined || value === null) return undefined;
+  let raw: unknown[] = [];
+  if (Array.isArray(value)) {
+    raw = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        raw = JSON.parse(trimmed);
+      } catch {
+        raw = [];
+      }
+    } else {
+      raw = trimmed ? trimmed.split(",") : [];
+    }
+  }
+  const roles = raw
+    .map((r) => String(r).trim())
+    .filter((r): r is FieldRole => (FIELD_ROLES as readonly string[]).includes(r));
+  return Array.from(new Set(roles));
 };
 
 // GET TEAM MEMBERS FOR HOMEPAGE
@@ -330,6 +358,10 @@ export const createMember: RequestHandler = async (
       instagram,
       image: cloudImage?.url,
       memberType: memberTypeValue,
+      fieldRoles:
+        memberTypeValue === "fieldhero"
+          ? parseFieldRoles(req.body.fieldRoles) ?? []
+          : [],
       countryCode,
       phoneNumber,
       description,
@@ -421,6 +453,14 @@ export const updateMember: RequestHandler = async (
         });
       }
       updates.memberType = memberType;
+    }
+
+    const parsedFieldRoles = parseFieldRoles(req.body.fieldRoles);
+    if (parsedFieldRoles !== undefined) {
+      updates.fieldRoles = parsedFieldRoles;
+    }
+    if (memberType === "boardmember") {
+      updates.fieldRoles = [];
     }
 
     if (typeof specialization !== "undefined") {

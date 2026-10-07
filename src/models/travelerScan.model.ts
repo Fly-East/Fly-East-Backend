@@ -31,6 +31,9 @@ export const INSURANCE_COMPANIES = [
 ] as const;
 export type InsuranceCompany = (typeof INSURANCE_COMPANIES)[number];
 
+export const END_DATE_SOURCES = ["calculated", "manual"] as const;
+export type EndDateSource = (typeof END_DATE_SOURCES)[number];
+
 export interface TravelerScanDocumentItem {
   _id: Types.ObjectId;
   kind: TravelerDocumentKind;
@@ -67,6 +70,10 @@ export interface TravelerScanDocument extends Document {
   trekkingRoute?: string;
   bookingDate?: Date;
   departureDate?: Date;
+  endDate?: Date;
+  endDateSource?: EndDateSource;
+  package?: Types.ObjectId;
+  guideAssignment?: Types.ObjectId;
   insurancePolicyNumber?: string;
   insuranceCompany?: string;
   insuranceCompanyOther?: string;
@@ -127,6 +134,14 @@ const TravelerScanSchema = new Schema<TravelerScanDocument>(
     trekkingRoute: { type: String, trim: true },
     bookingDate: { type: Date },
     departureDate: { type: Date },
+    endDate: { type: Date },
+    endDateSource: { type: String, enum: END_DATE_SOURCES },
+    package: { type: Schema.Types.ObjectId, ref: "Package" },
+    guideAssignment: {
+      type: Schema.Types.ObjectId,
+      ref: "GuideSchedule",
+      index: true,
+    },
     insurancePolicyNumber: { type: String, trim: true },
     insuranceCompany: { type: String, trim: true },
     insuranceCompanyOther: { type: String, trim: true },
