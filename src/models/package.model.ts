@@ -60,6 +60,10 @@ const PackageSchema = new Schema<PackageType>(
       type: String,
       required: [true, "Duration is required"],
     },
+    durationDays: {
+      type: Number,
+      min: 1,
+    },
     categoryId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Category",

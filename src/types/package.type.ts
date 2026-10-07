@@ -37,6 +37,7 @@ export interface PackageType extends Document {
   note: string;
   packageType: "luxury" | "budget" | "premium";
   duration: string;
+  durationDays?: number;
   id: string;
   categoryId: Types.ObjectId;
   subCategoryId: Types.ObjectId;

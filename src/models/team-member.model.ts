@@ -1,6 +1,10 @@
 import mongoose, { Document, Schema } from "mongoose";
 
+export const FIELD_ROLES = ["guide", "porter", "porter_guide"] as const;
+export type FieldRole = (typeof FIELD_ROLES)[number];
+
 export interface IMember extends Document {
+  fieldRoles: FieldRole[];
   addToHome: boolean;
   name: string;
   facebook?: string;
@@ -44,6 +48,11 @@ const MemberSchema: Schema = new Schema(
       type: String,
       enum: ["boardmember", "fieldhero"],
       required: [true, "Member type is required"],
+    },
+    fieldRoles: {
+      type: [String],
+      enum: FIELD_ROLES,
+      default: [],
     },
     countryCode: {
       type: String,
