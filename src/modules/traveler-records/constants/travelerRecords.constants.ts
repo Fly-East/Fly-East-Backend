@@ -35,6 +35,7 @@ export const RECORD_GROUP_BY = [
   "trekkingRoute",
   "departureDate",
   "bookingDate",
+  "insuranceCompany",
 ] as const;
 export type RecordGroupBy = (typeof RECORD_GROUP_BY)[number];
 
