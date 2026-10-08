@@ -1,29 +1,20 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
-import { FIELD_ROLES, FieldRole } from "./team-member.model";
-import { END_DATE_SOURCES, EndDateSource } from "./travelerScan.model";
-
-export const SCHEDULE_TYPES = ["trek", "unavailable"] as const;
-export type ScheduleType = (typeof SCHEDULE_TYPES)[number];
-
-export const SCHEDULE_SOURCES = ["traveler_scan", "manual"] as const;
-export type ScheduleSource = (typeof SCHEDULE_SOURCES)[number];
-
-export const UNAVAILABLE_KINDS = [
-  "on_trip",
-  "leave",
-  "sick",
-  "personal",
-  "other",
-] as const;
-export type UnavailableKind = (typeof UNAVAILABLE_KINDS)[number];
-
-export const SCHEDULE_STATUSES = [
-  "planned",
-  "ongoing",
-  "completed",
-  "cancelled",
-] as const;
-export type ScheduleStatus = (typeof SCHEDULE_STATUSES)[number];
+import {
+  FIELD_ROLES,
+  FieldRole,
+  SCHEDULE_SOURCES,
+  SCHEDULE_STATUSES,
+  SCHEDULE_TYPES,
+  ScheduleSource,
+  ScheduleStatus,
+  ScheduleType,
+  UNAVAILABLE_KINDS,
+  UnavailableKind,
+} from "../constants/guides.constants";
+import {
+  END_DATE_SOURCES,
+  EndDateSource,
+} from "../../traveler-records/constants/travelerRecords.constants";
 
 export interface GuideScheduleDocument extends Document {
   member: Types.ObjectId;
@@ -36,7 +27,7 @@ export interface GuideScheduleDocument extends Document {
   trekkingRegion?: string;
   trekkingRoute?: string;
   package?: Types.ObjectId;
-  travelerScans: Types.ObjectId[];
+  travelerRecords: Types.ObjectId[];
   startDate: Date;
   /** null = open-ended */
   endDate?: Date | null;
@@ -72,7 +63,7 @@ const GuideScheduleSchema = new Schema<GuideScheduleDocument>(
     trekkingRegion: { type: String, trim: true },
     trekkingRoute: { type: String, trim: true },
     package: { type: Schema.Types.ObjectId, ref: "Package" },
-    travelerScans: [{ type: Schema.Types.ObjectId, ref: "TravelerScan" }],
+    travelerRecords: [{ type: Schema.Types.ObjectId, ref: "TravelerRecord" }],
     startDate: { type: Date, required: true },
     endDate: { type: Date, default: null },
     departureDay: { type: String, required: true },
@@ -92,5 +83,8 @@ GuideScheduleSchema.index(
   { unique: true, partialFilterExpression: { shareKey: { $exists: true } } }
 );
 
-export default mongoose.models.GuideSchedule ||
+export const GuideSchedule =
+  (mongoose.models.GuideSchedule as mongoose.Model<GuideScheduleDocument>) ||
   mongoose.model<GuideScheduleDocument>("GuideSchedule", GuideScheduleSchema);
+
+export default GuideSchedule;

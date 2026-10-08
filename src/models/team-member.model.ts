@@ -1,10 +1,6 @@
-import mongoose, { Document, Schema } from "mongoose";
-
-export const FIELD_ROLES = ["guide", "porter", "porter_guide"] as const;
-export type FieldRole = (typeof FIELD_ROLES)[number];
+import mongoose, { Document, Query, Schema } from "mongoose";
 
 export interface IMember extends Document {
-  fieldRoles: FieldRole[];
   addToHome: boolean;
   name: string;
   facebook?: string;
@@ -23,6 +19,9 @@ export interface IMember extends Document {
   specialization?: string;
   yearsOfExperience?: number;
   age?: number;
+  isDeleted: boolean;
+  deletedAt?: Date | null;
+  deletedBy?: mongoose.Types.ObjectId | null;
 }
 
 const MemberSchema: Schema = new Schema(
@@ -48,11 +47,6 @@ const MemberSchema: Schema = new Schema(
       type: String,
       enum: ["boardmember", "fieldhero"],
       required: [true, "Member type is required"],
-    },
-    fieldRoles: {
-      type: [String],
-      enum: FIELD_ROLES,
-      default: [],
     },
     countryCode: {
       type: String,
@@ -104,8 +98,44 @@ const MemberSchema: Schema = new Schema(
     instagram: {
       type: String,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   { timestamps: true }
+);
+
+/**
+ * Soft-deleted members are hidden from every query unless the query sets
+ * `{ withDeleted: true }` or filters on `isDeleted` explicitly.
+ */
+function excludeDeleted(this: Query<unknown, IMember>) {
+  if ((this.getOptions() as { withDeleted?: boolean }).withDeleted) return;
+  if (this.getFilter().isDeleted !== undefined) return;
+  this.where({ isDeleted: { $ne: true } });
+}
+
+MemberSchema.pre(
+  [
+    "find",
+    "findOne",
+    "findOneAndUpdate",
+    "countDocuments",
+    "updateOne",
+    "updateMany",
+  ],
+  excludeDeleted
 );
 
 export default mongoose.model<IMember>("Member", MemberSchema);

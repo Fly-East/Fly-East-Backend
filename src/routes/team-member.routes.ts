@@ -7,6 +7,9 @@ import {
   deleteMember,
   getHomeTeamMembers,
   updateMembersOrder,
+  getMemberDeleteImpact,
+  getDeletedMembers,
+  restoreMember,
 } from "../controller/team-member.controller";
 import { upload } from "../middleware/multer.middleware";
 import { checkPermissions, isAdmin } from "../middleware/isAdmin";
@@ -45,6 +48,24 @@ router.post(
   isAdmin,
   checkPermissions(["create"]),
   createMember
+);
+router.get(
+  "/api/v1/teamMember/deleted",
+  isAdmin,
+  checkPermissions(["delete"]),
+  getDeletedMembers
+);
+router.get(
+  "/api/v1/teamMember/:id/delete-impact",
+  isAdmin,
+  checkPermissions(["delete"]),
+  getMemberDeleteImpact
+);
+router.patch(
+  "/api/v1/teamMember/:id/restore",
+  isAdmin,
+  checkPermissions(["delete"]),
+  restoreMember
 );
 router.get("/api/v1/teamMember/:id", getMember);
 router.put(

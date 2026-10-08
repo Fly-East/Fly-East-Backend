@@ -1,11 +1,9 @@
 import mongoose, { ClientSession, Types } from "mongoose";
-import GuideSchedule, {
-  GuideScheduleDocument,
-} from "../models/guideSchedule.model";
-import GuideProfile from "../models/guideProfile.model";
-import TravelerScan from "../models/travelerScan.model";
-import Member from "../models/team-member.model";
-import Package from "../models/package.model";
+import GuideSchedule, { GuideScheduleDocument } from "../model/guideSchedule.model";
+import GuideProfile from "../model/guideProfile.model";
+import TravelerRecord from "../../traveler-records/model/travelerRecord.model";
+import Member from "../../../models/team-member.model";
+import Package from "../../../models/package.model";
 
 const NEPAL_TZ = "Asia/Kathmandu";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -159,29 +157,29 @@ export function computeAvailability(
   return { available: false, currentEntry: current[0], availableFrom: nextDay(busyUntil) };
 }
 
-export async function resolveScanEndDate(scan: {
+export async function resolveRecordEndDate(record: {
   departureDate?: Date;
   endDate?: Date;
   package?: Types.ObjectId | null;
 }): Promise<Date | undefined> {
-  if (scan.endDate) return scan.endDate;
-  if (!scan.departureDate || !scan.package) return undefined;
-  const pkg = await Package.findById(scan.package)
+  if (record.endDate) return record.endDate;
+  if (!record.departureDate || !record.package) return undefined;
+  const pkg = await Package.findById(record.package)
     .select("duration durationDays")
     .lean<{ duration?: string; durationDays?: number }>();
   const days = pkg?.durationDays ?? parseDurationDays(pkg?.duration);
-  return days ? computeEndDate(scan.departureDate, days) : undefined;
+  return days ? computeEndDate(record.departureDate, days) : undefined;
 }
 
 export type AssignResult = {
   schedule: GuideScheduleDocument;
   shared: boolean;
   endDateDiffers: boolean;
-  scanEndDate?: Date;
+  recordEndDate?: Date;
 };
 
-export async function assignGuideToScan(
-  scanId: string,
+export async function assignGuideToRecord(
+  recordId: string,
   memberId: string,
   options: {
     endDate?: Date;
@@ -193,13 +191,13 @@ export async function assignGuideToScan(
   try {
     let result: AssignResult | undefined;
     await session.withTransaction(async () => {
-      const scan = await TravelerScan.findById(scanId).session(session);
-      if (!scan) throw new GuideScheduleError(404, "SCAN_NOT_FOUND", "Traveler scan not found");
-      if (!scan.departureDate) {
+      const record = await TravelerRecord.findById(recordId).session(session);
+      if (!record) throw new GuideScheduleError(404, "RECORD_NOT_FOUND", "Traveller record not found");
+      if (!record.departureDate) {
         throw new GuideScheduleError(
           400,
           "DEPARTURE_REQUIRED",
-          "Set a departure date on the scan before assigning a guide"
+          "Set a departure date on the record before assigning a guide"
         );
       }
 
@@ -223,37 +221,37 @@ export async function assignGuideToScan(
       }
 
       if (options.endDate) {
-        scan.endDate = options.endDate;
-        scan.endDateSource = "manual";
+        record.endDate = options.endDate;
+        record.endDateSource = "manual";
       }
-      const scanEndDate = await resolveScanEndDate(scan);
-      if (scanEndDate && !scan.endDate) {
-        scan.endDate = scanEndDate;
-        scan.endDateSource = "calculated";
+      const recordEndDate = await resolveRecordEndDate(record);
+      if (recordEndDate && !record.endDate) {
+        record.endDate = recordEndDate;
+        record.endDateSource = "calculated";
       }
 
-      const departureDay = toDepartureDay(scan.departureDate);
-      const shareKey = buildShareKey(scan, departureDay);
+      const departureDay = toDepartureDay(record.departureDate);
+      const shareKey = buildShareKey(record, departureDay);
 
-      if (scan.guideAssignment) {
-        const current = await GuideSchedule.findById(scan.guideAssignment).session(session);
+      if (record.guideAssignment) {
+        const current = await GuideSchedule.findById(record.guideAssignment).session(session);
         if (
           current &&
           current.status !== "cancelled" &&
           String(current.member) === String(memberId) &&
           current.shareKey === shareKey
         ) {
-          await scan.save({ session });
+          await record.save({ session });
           result = {
             schedule: current.toObject(),
-            shared: current.travelerScans.length > 1,
+            shared: current.travelerRecords.length > 1,
             endDateDiffers: false,
-            scanEndDate,
+            recordEndDate,
           };
           return;
         }
-        await detachScan(scan._id, scan.guideAssignment, session);
-        scan.guideAssignment = undefined;
+        await detachRecord(record._id, record.guideAssignment, session);
+        record.guideAssignment = undefined;
       }
 
       const shareable = shareKey
@@ -263,28 +261,28 @@ export async function assignGuideToScan(
       if (shareable) {
         await GuideSchedule.updateOne(
           { _id: shareable._id },
-          { $addToSet: { travelerScans: scan._id } },
+          { $addToSet: { travelerRecords: record._id } },
           { session }
         );
-        scan.guideAssignment = shareable._id;
-        await scan.save({ session });
+        record.guideAssignment = shareable._id;
+        await record.save({ session });
         const endDateDiffers =
-          !!scanEndDate &&
+          !!recordEndDate &&
           !!shareable.endDate &&
-          toDepartureDay(scanEndDate) !== toDepartureDay(shareable.endDate);
+          toDepartureDay(recordEndDate) !== toDepartureDay(shareable.endDate);
         result = {
           schedule: shareable.toObject(),
           shared: true,
           endDateDiffers,
-          scanEndDate,
+          recordEndDate,
         };
         return;
       }
 
       const conflicts = await findConflicts(
         memberId,
-        scan.departureDate,
-        scanEndDate ?? scan.departureDate,
+        record.departureDate,
+        recordEndDate ?? record.departureDate,
         { session }
       );
       if (conflicts.length && !options.force) {
@@ -302,25 +300,25 @@ export async function assignGuideToScan(
             member: memberId,
             role: "guide",
             type: "trek",
-            source: "traveler_scan",
-            trekName: scan.trekkingRoute || scan.trekkingArea,
-            trekkingRegion: scan.trekkingRegion,
-            trekkingRoute: scan.trekkingRoute,
-            package: scan.package,
-            travelerScans: [scan._id],
-            startDate: scan.departureDate,
-            endDate: scanEndDate ?? null,
+            source: "traveler_record",
+            trekName: record.trekkingRoute || record.trekkingArea,
+            trekkingRegion: record.trekkingRegion,
+            trekkingRoute: record.trekkingRoute,
+            package: record.package,
+            travelerRecords: [record._id],
+            startDate: record.departureDate,
+            endDate: recordEndDate ?? null,
             departureDay,
-            endDateSource: scan.endDateSource,
+            endDateSource: record.endDateSource,
             shareKey,
             createdBy: options.userId,
           },
         ],
         { session }
       );
-      scan.guideAssignment = created._id;
-      await scan.save({ session });
-      result = { schedule: created.toObject(), shared: false, endDateDiffers: false, scanEndDate };
+      record.guideAssignment = created._id;
+      await record.save({ session });
+      result = { schedule: created.toObject(), shared: false, endDateDiffers: false, recordEndDate };
     });
     return result!;
   } finally {
@@ -328,17 +326,17 @@ export async function assignGuideToScan(
   }
 }
 
-async function detachScan(
-  scanId: Types.ObjectId,
+async function detachRecord(
+  recordId: Types.ObjectId,
   scheduleId: Types.ObjectId,
   session: ClientSession
 ) {
   const updated = await GuideSchedule.findByIdAndUpdate(
     scheduleId,
-    { $pull: { travelerScans: scanId } },
+    { $pull: { travelerRecords: recordId } },
     { new: true, session }
   );
-  if (updated && updated.source === "traveler_scan" && updated.travelerScans.length === 0) {
+  if (updated && updated.source === "traveler_record" && updated.travelerRecords.length === 0) {
     await GuideSchedule.updateOne(
       { _id: updated._id },
       { $set: { status: "cancelled" }, $unset: { shareKey: 1 } },
@@ -347,32 +345,32 @@ async function detachScan(
   }
 }
 
-export async function unassignGuideFromScan(scanId: string) {
+export async function unassignGuideFromRecord(recordId: string) {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      const scan = await TravelerScan.findById(scanId).session(session);
-      if (!scan) throw new GuideScheduleError(404, "SCAN_NOT_FOUND", "Traveler scan not found");
-      if (!scan.guideAssignment) return;
-      await detachScan(scan._id, scan.guideAssignment, session);
-      scan.guideAssignment = undefined;
-      await scan.save({ session });
+      const record = await TravelerRecord.findById(recordId).session(session);
+      if (!record) throw new GuideScheduleError(404, "RECORD_NOT_FOUND", "Traveller record not found");
+      if (!record.guideAssignment) return;
+      await detachRecord(record._id, record.guideAssignment, session);
+      record.guideAssignment = undefined;
+      await record.save({ session });
     });
   } finally {
     await session.endSession();
   }
 }
 
-/** Shared end date edit: one trip, one end date for every scan on it. */
+/** Shared end date edit: one trip, one end date for every record on it. */
 export async function updateScheduleEndDate(scheduleId: string, endDate: Date | null) {
   const schedule = await GuideSchedule.findByIdAndUpdate(
     scheduleId,
     { $set: { endDate, endDateSource: "manual" } },
     { new: true }
   );
-  if (schedule?.travelerScans?.length && endDate) {
-    await TravelerScan.updateMany(
-      { _id: { $in: schedule.travelerScans } },
+  if (schedule?.travelerRecords?.length && endDate) {
+    await TravelerRecord.updateMany(
+      { _id: { $in: schedule.travelerRecords } },
       { $set: { endDate, endDateSource: "manual" } }
     );
   }

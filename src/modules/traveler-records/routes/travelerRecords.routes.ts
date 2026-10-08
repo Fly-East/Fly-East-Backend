@@ -1,0 +1,104 @@
+import { Router } from "express";
+import {
+  listTravelerRecords,
+  getTravelerRecordById,
+  createTravelerRecord,
+  updateTravelerRecord,
+  addTravelerRecordDocuments,
+  deleteTravelerRecordDocument,
+  deleteTravelerRecord,
+  getTravelerRecordOptions,
+  groupTravelerRecordsHandler,
+} from "../controller/travelerRecords.controller";
+import { checkPermissions, isAdmin } from "../../../middleware/isAdmin";
+import { upload, handleMulterError } from "../../../middleware/multer.middleware";
+import { validate } from "../../../middleware/validate";
+import {
+  createTravelerRecordSchema,
+  updateTravelerRecordSchema,
+  getTravelerRecordSchema,
+  deleteTravelerRecordSchema,
+  listTravelerRecordsSchema,
+  groupTravelerRecordsSchema,
+  addTravelerRecordDocumentsSchema,
+  deleteTravelerRecordDocumentSchema,
+} from "../validation/travelerRecords.validation";
+
+const router = Router();
+
+router.get(
+  "/api/v1/traveler-records",
+  isAdmin,
+  checkPermissions(["view"]),
+  validate(listTravelerRecordsSchema),
+  listTravelerRecords
+);
+
+router.get(
+  "/api/v1/traveler-records/options",
+  isAdmin,
+  checkPermissions(["view"]),
+  getTravelerRecordOptions
+);
+
+router.get(
+  "/api/v1/traveler-records/groups",
+  isAdmin,
+  checkPermissions(["view"]),
+  validate(groupTravelerRecordsSchema),
+  groupTravelerRecordsHandler
+);
+
+router.get(
+  "/api/v1/traveler-records/:id",
+  isAdmin,
+  checkPermissions(["view"]),
+  validate(getTravelerRecordSchema),
+  getTravelerRecordById
+);
+
+router.post(
+  "/api/v1/traveler-records",
+  upload.array("images", 20),
+  handleMulterError,
+  isAdmin,
+  checkPermissions(["create"]),
+  validate(createTravelerRecordSchema),
+  createTravelerRecord
+);
+
+router.put(
+  "/api/v1/traveler-records/:id",
+  isAdmin,
+  checkPermissions(["update"]),
+  validate(updateTravelerRecordSchema),
+  updateTravelerRecord
+);
+
+router.post(
+  "/api/v1/traveler-records/:id/documents",
+  upload.array("images", 20),
+  handleMulterError,
+  isAdmin,
+  checkPermissions(["create"]),
+  validate(addTravelerRecordDocumentsSchema),
+  addTravelerRecordDocuments
+);
+
+router.delete(
+  "/api/v1/traveler-records/:id/documents/:docId",
+  isAdmin,
+  checkPermissions(["delete"]),
+  validate(deleteTravelerRecordDocumentSchema),
+  deleteTravelerRecordDocument
+);
+
+router.delete(
+  "/api/v1/traveler-records/:id",
+  isAdmin,
+  checkPermissions(["delete"]),
+  validate(deleteTravelerRecordSchema),
+  deleteTravelerRecord
+);
+
+export default router;

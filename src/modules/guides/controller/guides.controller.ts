@@ -1,27 +1,28 @@
 import { Request, Response } from "express";
 import { Types } from "mongoose";
-import Member from "../models/team-member.model";
-import GuideProfile from "../models/guideProfile.model";
+import Member from "../../../models/team-member.model";
+import GuideProfile from "../model/guideProfile.model";
 import GuideSchedule, {
   GuideScheduleDocument,
-} from "../models/guideSchedule.model";
-import TravelerScan from "../models/travelerScan.model";
-import logger from "../utils/logger";
+} from "../model/guideSchedule.model";
+import TravelerRecord from "../../traveler-records/model/travelerRecord.model";
+import logger from "../../../utils/logger";
 import {
   GuideScheduleError,
-  assignGuideToScan,
+  assignGuideToRecord,
   buildShareKey,
   computeAvailability,
   findBusyMemberIds,
   findConflicts,
   toDepartureDay,
-  unassignGuideFromScan,
+  unassignGuideFromRecord,
   updateScheduleEndDate,
 } from "../service/guideSchedule.service";
+import { saveGuideProfile } from "../service/memberGuide.service";
 
 const SCHEDULE_POPULATE = [
   { path: "package", select: "name slug duration durationDays" },
-  { path: "travelerScans", select: "fullName nationality departureDate endDate" },
+  { path: "travelerRecords", select: "fullName nationality departureDate endDate" },
 ];
 
 function parseBool(value: unknown): boolean {
@@ -86,13 +87,22 @@ export const listGuides = async (req: Request, res: Response) => {
     const departureDate = parseDate(req.query.departureDate);
 
     const memberFilter: Record<string, unknown> = { memberType: "fieldhero" };
-    if (role) memberFilter.fieldRoles = role;
+    if (role === "guide") {
+      // No profile yet = default role "guide"
+      memberFilter._id = {
+        $nin: await GuideProfile.distinct("member", { fieldRole: { $ne: "guide" } }),
+      };
+    } else if (role) {
+      memberFilter._id = {
+        $in: await GuideProfile.distinct("member", { fieldRole: role }),
+      };
+    }
     if (q?.trim()) {
       memberFilter.name = { $regex: q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
     }
 
     const members = await Member.find(memberFilter)
-      .select("name image designation fieldRoles countryCode phoneNumber yearsOfExperience")
+      .select("name image designation countryCode phoneNumber yearsOfExperience")
       .sort({ sortOrder: 1 })
       .lean();
     const memberIds = members.map((m) => m._id);
@@ -162,7 +172,9 @@ export const listGuides = async (req: Request, res: Response) => {
 export const getGuide = async (req: Request, res: Response) => {
   try {
     const { memberId } = req.params;
-    const member = await Member.findById(memberId).lean<any>();
+    const member = await Member.findById(memberId)
+      .setOptions({ withDeleted: true } as any)
+      .lean<any>();
     if (!member || member.memberType !== "fieldhero") {
       return res.status(404).json({ success: false, message: "Field hero not found" });
     }
@@ -200,28 +212,7 @@ export const upsertGuideProfile = async (req: Request, res: Response) => {
   try {
     const { memberId } = req.params;
     await ensureFieldHero(memberId);
-    const body = req.body || {};
-    const set: Record<string, unknown> = {};
-    for (const key of [
-      "licenseNumber",
-      "languages",
-      "regions",
-      "isAvailable",
-      "unavailableReason",
-      "notes",
-    ]) {
-      if (body[key] !== undefined) set[key] = body[key];
-    }
-    if (body.licenseExpiry !== undefined) {
-      set.licenseExpiry = body.licenseExpiry ? new Date(body.licenseExpiry) : null;
-    }
-    if (body.isAvailable === true) set.unavailableReason = "";
-
-    const profile = await GuideProfile.findOneAndUpdate(
-      { member: memberId },
-      { $set: set, $setOnInsert: { member: memberId } },
-      { new: true, upsert: true, runValidators: true }
-    );
+    const profile = await saveGuideProfile(memberId, req.body || {});
     return res.status(200).json({ success: true, data: profile });
   } catch (error: any) {
     return handleError(res, error, "Failed to update guide profile", "upsertGuideProfile");
@@ -367,9 +358,9 @@ export const updateGuideSchedule = async (req: Request, res: Response) => {
     if (endDateChanged) {
       await updateScheduleEndDate(id, (fields.endDate as Date | null) ?? null);
     }
-    if (merged.status === "cancelled" && existing.travelerScans?.length) {
-      await TravelerScan.updateMany(
-        { _id: { $in: existing.travelerScans }, guideAssignment: existing._id },
+    if (merged.status === "cancelled" && existing.travelerRecords?.length) {
+      await TravelerRecord.updateMany(
+        { _id: { $in: existing.travelerRecords }, guideAssignment: existing._id },
         { $unset: { guideAssignment: 1 } }
       );
     }
@@ -388,9 +379,9 @@ export const deleteGuideSchedule = async (req: Request, res: Response) => {
     if (!existing) {
       return res.status(404).json({ success: false, message: "Schedule entry not found" });
     }
-    if (existing.travelerScans?.length) {
-      await TravelerScan.updateMany(
-        { _id: { $in: existing.travelerScans }, guideAssignment: existing._id },
+    if (existing.travelerRecords?.length) {
+      await TravelerRecord.updateMany(
+        { _id: { $in: existing.travelerRecords }, guideAssignment: existing._id },
         { $unset: { guideAssignment: 1 } }
       );
     }
@@ -403,18 +394,22 @@ export const deleteGuideSchedule = async (req: Request, res: Response) => {
 
 export const assignGuide = async (req: Request, res: Response) => {
   try {
-    const result = await assignGuideToScan(req.params.id, req.body.memberId, {
+    const result = await assignGuideToRecord(req.params.id, req.body.memberId, {
       endDate: parseDate(req.body.endDate),
       force: parseBool(req.body.force),
       userId: userIdOf(req) as Types.ObjectId | undefined,
     });
-    const scan = await TravelerScan.findById(req.params.id)
+    const record = await TravelerRecord.findById(req.params.id)
       .populate({
         path: "guideAssignment",
-        populate: { path: "member", select: "name image" },
+        populate: {
+          path: "member",
+          select: "name image isDeleted",
+          options: { withDeleted: true },
+        },
       })
       .lean();
-    return res.status(200).json({ success: true, data: { ...result, scan } });
+    return res.status(200).json({ success: true, data: { ...result, record } });
   } catch (error: any) {
     return handleError(res, error, "Failed to assign guide", "assignGuide");
   }
@@ -422,7 +417,7 @@ export const assignGuide = async (req: Request, res: Response) => {
 
 export const unassignGuide = async (req: Request, res: Response) => {
   try {
-    await unassignGuideFromScan(req.params.id);
+    await unassignGuideFromRecord(req.params.id);
     return res.status(200).json({ success: true, message: "Guide unassigned" });
   } catch (error: any) {
     return handleError(res, error, "Failed to unassign guide", "unassignGuide");
