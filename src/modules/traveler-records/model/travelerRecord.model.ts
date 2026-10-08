@@ -1,40 +1,15 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
+import {
+  END_DATE_SOURCES,
+  EndDateSource,
+  TRAVELER_DOCUMENT_KINDS,
+  TRAVELER_DOCUMENT_SOURCES,
+  TRAVELER_RECORDS_COLLECTION,
+  TravelerDocumentKind,
+  TravelerDocumentSource,
+} from "../constants/travelerRecords.constants";
 
-export const TRAVELER_SCAN_STATUSES = ["draft", "complete", "archived"] as const;
-export type TravelerScanStatus = (typeof TRAVELER_SCAN_STATUSES)[number];
-
-export const TRAVELER_DOCUMENT_KINDS = [
-  "passport_bio",
-  "id_front",
-  "id_back",
-  "visa",
-  "other",
-] as const;
-export type TravelerDocumentKind = (typeof TRAVELER_DOCUMENT_KINDS)[number];
-
-export const TRAVELER_DOCUMENT_SOURCES = ["webfxscan", "upload"] as const;
-export type TravelerDocumentSource = (typeof TRAVELER_DOCUMENT_SOURCES)[number];
-
-export const TREKKER_GENDERS = ["Male", "Female", "LGBTQIA+"] as const;
-export type TrekkerGender = (typeof TREKKER_GENDERS)[number];
-
-export const INSURANCE_COMPANIES = [
-  "Clal",
-  "Passport Card",
-  "Harel",
-  "Migdal",
-  "Menora",
-  "AIG",
-  "Pheonix",
-  "Yashir",
-  "Other",
-] as const;
-export type InsuranceCompany = (typeof INSURANCE_COMPANIES)[number];
-
-export const END_DATE_SOURCES = ["calculated", "manual"] as const;
-export type EndDateSource = (typeof END_DATE_SOURCES)[number];
-
-export interface TravelerScanDocumentItem {
+export interface TravelerRecordDocumentItem {
   _id: Types.ObjectId;
   kind: TravelerDocumentKind;
   imageUrl: string;
@@ -46,7 +21,7 @@ export interface TravelerScanDocumentItem {
   fileSize?: number;
 }
 
-export interface TravelerScanDocument extends Document {
+export interface TravelerRecordDocument extends Document {
   /** Display name = firstName + lastName */
   fullName: string;
   firstName?: string;
@@ -82,14 +57,13 @@ export interface TravelerScanDocument extends Document {
   porterGuideName?: string;
   mrzRaw?: string;
   notes?: string;
-  status: TravelerScanStatus;
   scannedBy?: Types.ObjectId;
-  documents: TravelerScanDocumentItem[];
+  documents: Types.DocumentArray<TravelerRecordDocumentItem>;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const TravelerScanDocumentItemSchema = new Schema<TravelerScanDocumentItem>(
+const TravelerRecordDocumentItemSchema = new Schema<TravelerRecordDocumentItem>(
   {
     kind: {
       type: String,
@@ -113,7 +87,7 @@ const TravelerScanDocumentItemSchema = new Schema<TravelerScanDocumentItem>(
   { _id: true }
 );
 
-const TravelerScanSchema = new Schema<TravelerScanDocument>(
+const TravelerRecordSchema = new Schema<TravelerRecordDocument>(
   {
     fullName: { type: String, required: true, trim: true },
     firstName: { type: String, trim: true },
@@ -150,28 +124,29 @@ const TravelerScanSchema = new Schema<TravelerScanDocument>(
     porterGuideName: { type: String, trim: true },
     mrzRaw: { type: String, trim: false },
     notes: { type: String, trim: false },
-    status: {
-      type: String,
-      enum: TRAVELER_SCAN_STATUSES,
-      required: true,
-      default: "draft",
-    },
     scannedBy: {
       type: Schema.Types.ObjectId,
       ref: "User",
       required: false,
     },
     documents: {
-      type: [TravelerScanDocumentItemSchema],
+      type: [TravelerRecordDocumentItemSchema],
       default: [],
     },
   },
   { timestamps: true }
 );
 
-TravelerScanSchema.index({ createdAt: -1 });
-TravelerScanSchema.index({ "documents.publicId": 1 });
-TravelerScanSchema.index({ email: 1 });
+TravelerRecordSchema.index({ createdAt: -1 });
+TravelerRecordSchema.index({ "documents.publicId": 1 });
+TravelerRecordSchema.index({ email: 1 });
 
-export default mongoose.models.TravelerScan ||
-  mongoose.model<TravelerScanDocument>("TravelerScan", TravelerScanSchema);
+export const TravelerRecord =
+  (mongoose.models.TravelerRecord as mongoose.Model<TravelerRecordDocument>) ||
+  mongoose.model<TravelerRecordDocument>(
+    "TravelerRecord",
+    TravelerRecordSchema,
+    TRAVELER_RECORDS_COLLECTION
+  );
+
+export default TravelerRecord;

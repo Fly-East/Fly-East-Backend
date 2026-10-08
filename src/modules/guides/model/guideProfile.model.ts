@@ -1,11 +1,12 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
+import { FIELD_ROLES, FieldRole } from "../constants/guides.constants";
 
 export interface GuideProfileDocument extends Document {
   member: Types.ObjectId;
+  fieldRole: FieldRole;
   licenseNumber?: string;
   licenseExpiry?: Date;
   languages: string[];
-  regions: string[];
   isAvailable: boolean;
   unavailableReason?: string;
   notes?: string;
@@ -21,10 +22,16 @@ const GuideProfileSchema = new Schema<GuideProfileDocument>(
       required: true,
       unique: true,
     },
+    fieldRole: {
+      type: String,
+      enum: FIELD_ROLES,
+      default: "guide",
+      required: true,
+      index: true,
+    },
     licenseNumber: { type: String, trim: true },
     licenseExpiry: { type: Date },
     languages: { type: [String], default: [] },
-    regions: { type: [String], default: [] },
     isAvailable: { type: Boolean, default: true },
     unavailableReason: { type: String, trim: true },
     notes: { type: String },
@@ -32,5 +39,8 @@ const GuideProfileSchema = new Schema<GuideProfileDocument>(
   { timestamps: true }
 );
 
-export default mongoose.models.GuideProfile ||
+export const GuideProfile =
+  (mongoose.models.GuideProfile as mongoose.Model<GuideProfileDocument>) ||
   mongoose.model<GuideProfileDocument>("GuideProfile", GuideProfileSchema);
+
+export default GuideProfile;

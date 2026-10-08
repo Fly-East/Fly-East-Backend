@@ -9,9 +9,13 @@ import {
   deleteGuideSchedule,
   assignGuide,
   unassignGuide,
-} from "../controller/guide.controller";
-import { checkPermissions, isAdmin } from "../middleware/isAdmin";
-import { validate } from "../middleware/validate";
+} from "../controller/guides.controller";
+import {
+  getPublicGuide,
+  listPublicGuides,
+} from "../controller/publicGuides.controller";
+import { checkPermissions, isAdmin } from "../../../middleware/isAdmin";
+import { validate } from "../../../middleware/validate";
 import {
   listGuidesSchema,
   getGuideSchema,
@@ -22,9 +26,12 @@ import {
   deleteGuideScheduleSchema,
   assignGuideSchema,
   unassignGuideSchema,
-} from "../schema/guide.schema";
+} from "../validation/guides.validation";
 
 const router = Router();
+
+router.get("/api/v1/public/guides", listPublicGuides);
+router.get("/api/v1/public/guides/:slug", getPublicGuide);
 
 router.get(
   "/api/v1/guides",
@@ -83,7 +90,7 @@ router.delete(
 );
 
 router.post(
-  "/api/v1/traveler-scans/:id/assign-guide",
+  "/api/v1/traveler-records/:id/assign-guide",
   isAdmin,
   checkPermissions(["update"]),
   validate(assignGuideSchema),
@@ -91,7 +98,7 @@ router.post(
 );
 
 router.delete(
-  "/api/v1/traveler-scans/:id/assign-guide",
+  "/api/v1/traveler-records/:id/assign-guide",
   isAdmin,
   checkPermissions(["update"]),
   validate(unassignGuideSchema),
