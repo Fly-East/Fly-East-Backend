@@ -1,5 +1,5 @@
 /**
- * In-memory fuzzy search for traveler scans.
+ * In-memory fuzzy search for traveller records.
  *
  * Query syntax:
  *   free text            → every token must fuzzy-match some field
@@ -58,7 +58,6 @@ export const SEARCH_FIELD_GROUPS: FieldGroup[] = [
   },
   { key: "guide", aliases: ["guide", "porter"], weight: 1, paths: ["porterGuideName"] },
   { key: "gender", aliases: ["gender", "sex"], weight: 0.9, paths: ["gender", "sex"] },
-  { key: "status", aliases: ["status"], weight: 0.9, paths: ["status"] },
   { key: "doctype", aliases: ["doctype", "type"], weight: 0.8, paths: ["documentType"] },
   {
     key: "document",

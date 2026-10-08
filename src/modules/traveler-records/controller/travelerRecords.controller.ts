@@ -2,29 +2,37 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
 import stream from "stream";
-import TravelerScan, {
+import TravelerRecord, { TravelerRecordDocumentItem } from "../model/travelerRecord.model";
+import {
+  RECORD_GROUP_BY,
+  RecordGroupBy,
   TravelerDocumentKind,
   TravelerDocumentSource,
-  TravelerScanDocumentItem,
-} from "../models/travelerScan.model";
-import logger from "../utils/logger";
-import { deleteImage } from "../utils/cloudinary";
+} from "../constants/travelerRecords.constants";
+import { groupKeyFilter, groupTravelerRecords } from "../service/travelerRecordGroups";
+import { TREKKING_REGION_OPTIONS } from "../constants/trekking-areas.constants";
+import logger from "../../../utils/logger";
+import { deleteImage } from "../../../utils/cloudinary";
 import {
   fuzzySearchRecords,
   parseSearchQuery,
-} from "../utils/travelerScanSearch";
+} from "../service/travelerRecordSearch";
 import {
-  resolveScanEndDate,
-  unassignGuideFromScan,
-} from "../service/guideSchedule.service";
+  resolveRecordEndDate,
+  unassignGuideFromRecord,
+} from "../../guides/service/guideSchedule.service";
 
-const CLOUDINARY_FOLDER = "traveler-scans";
+const CLOUDINARY_FOLDER = "traveler-records";
 
 const GUIDE_ASSIGNMENT_POPULATE = [
   {
     path: "guideAssignment",
-    select: "member startDate endDate status travelerScans shareKey",
-    populate: { path: "member", select: "name image" },
+    select: "member startDate endDate status travelerRecords shareKey",
+    populate: {
+      path: "member",
+      select: "name image isDeleted",
+      options: { withDeleted: true },
+    },
   },
   { path: "package", select: "name duration durationDays" },
 ];
@@ -99,9 +107,9 @@ async function uploadFilesAsDocuments(
     source?: TravelerDocumentSource;
     deviceModel?: string;
   }
-): Promise<Partial<TravelerScanDocumentItem>[]> {
+): Promise<Partial<TravelerRecordDocumentItem>[]> {
   if (!files?.length) return [];
-  const docs: Partial<TravelerScanDocumentItem>[] = [];
+  const docs: Partial<TravelerRecordDocumentItem>[] = [];
   for (const file of files) {
     const uploaded = await uploadBufferToCloudinary(
       file.buffer,
@@ -128,9 +136,9 @@ async function uploadBase64AsDocuments(
     source?: TravelerDocumentSource;
     deviceModel?: string;
   }
-): Promise<Partial<TravelerScanDocumentItem>[]> {
+): Promise<Partial<TravelerRecordDocumentItem>[]> {
   if (!images?.length) return [];
-  const docs: Partial<TravelerScanDocumentItem>[] = [];
+  const docs: Partial<TravelerRecordDocumentItem>[] = [];
   for (const image of images) {
     const { buffer, mimeType } = stripDataUrl(image.data);
     const uploaded = await uploadBufferToCloudinary(buffer);
@@ -202,7 +210,6 @@ function identityFromBody(body: Record<string, any>) {
     porterGuideName: body.porterGuideName,
     mrzRaw: body.mrzRaw,
     notes: body.notes,
-    status: body.status,
   };
 }
 
@@ -236,9 +243,6 @@ function buildListFilter(query: Record<string, unknown>) {
     return typeof v === "string" && v.trim() ? v.trim() : undefined;
   };
 
-  const status = str("status");
-  if (status) filter.status = status;
-
   for (const key of [
     "nationality",
     "trekkingRegion",
@@ -259,10 +263,57 @@ function buildListFilter(query: Record<string, unknown>) {
   if (hasDocuments === "true") filter["documents.0"] = { $exists: true };
   if (hasDocuments === "false") filter["documents.0"] = { $exists: false };
 
+  const groupBy = str("groupBy") as RecordGroupBy | undefined;
+  const groupKey = str("groupKey");
+  if (groupBy && groupKey && RECORD_GROUP_BY.includes(groupBy)) {
+    return { $and: [filter, groupKeyFilter(groupBy, groupKey)] };
+  }
   return filter;
 }
 
-export const listTravelerScans = async (req: Request, res: Response) => {
+export const groupTravelerRecordsHandler = async (req: Request, res: Response) => {
+  try {
+    if (!requireAdminRole(req, res)) return;
+    const groupBy = String(req.query.groupBy) as RecordGroupBy;
+    const q = String(req.query.q || "").trim();
+    const { groupKey: _ignored, ...query } = req.query as Record<string, unknown>;
+    let match = buildListFilter(query);
+    let searchTruncated = false;
+
+    if (q) {
+      const candidates = await TravelerRecord.find(match)
+        .sort({ createdAt: -1 })
+        .limit(SEARCH_CANDIDATE_CAP)
+        .lean();
+      const hits = fuzzySearchRecords(candidates as Record<string, any>[], parseSearchQuery(q));
+      match = { _id: { $in: hits.map((h) => h.record._id) } };
+      searchTruncated = candidates.length >= SEARCH_CANDIDATE_CAP;
+    }
+
+    const groups = await groupTravelerRecords(match, groupBy);
+    return res.status(200).json({
+      success: true,
+      data: groups,
+      total: groups.reduce((sum, g) => sum + g.count, 0),
+      searchTruncated,
+    });
+  } catch (error: any) {
+    logger.error("groupTravelerRecords error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to group traveller records",
+    });
+  }
+};
+
+export const getTravelerRecordOptions = async (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    data: { regions: TREKKING_REGION_OPTIONS },
+  });
+};
+
+export const listTravelerRecords = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
 
@@ -277,7 +328,7 @@ export const listTravelerScans = async (req: Request, res: Response) => {
 
     if (q) {
       const tokens = parseSearchQuery(q);
-      const candidates = await TravelerScan.find(filter)
+      const candidates = await TravelerRecord.find(filter)
         .sort({ createdAt: -1 })
         .limit(SEARCH_CANDIDATE_CAP)
         .lean();
@@ -285,7 +336,7 @@ export const listTravelerScans = async (req: Request, res: Response) => {
       const total = hits.length;
       const totalPages = Math.ceil(total / limit) || 1;
       const pageHits = hits.slice(skip, skip + limit);
-      await TravelerScan.populate(
+      await TravelerRecord.populate(
         pageHits.map((h) => h.record),
         GUIDE_ASSIGNMENT_POPULATE
       );
@@ -309,13 +360,13 @@ export const listTravelerScans = async (req: Request, res: Response) => {
     }
 
     const [items, total] = await Promise.all([
-      TravelerScan.find(filter)
+      TravelerRecord.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .populate(GUIDE_ASSIGNMENT_POPULATE)
         .lean(),
-      TravelerScan.countDocuments(filter),
+      TravelerRecord.countDocuments(filter),
     ]);
 
     const totalPages = Math.ceil(total / limit) || 1;
@@ -332,22 +383,22 @@ export const listTravelerScans = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    logger.error("listTravelerScans error:", error);
+    logger.error("listTravelerRecords error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to list traveler scans",
+      message: error.message || "Failed to list traveller records",
     });
   }
 };
 
-export const getTravelerScanById = async (req: Request, res: Response) => {
+export const getTravelerRecordById = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
-    const item = await TravelerScan.findById(id)
+    const item = await TravelerRecord.findById(id)
       .populate(GUIDE_ASSIGNMENT_POPULATE)
       .lean();
     if (!item) {
@@ -355,15 +406,15 @@ export const getTravelerScanById = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ success: true, data: item });
   } catch (error: any) {
-    logger.error("getTravelerScanById error:", error);
+    logger.error("getTravelerRecordById error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to fetch traveler scan",
+      message: error.message || "Failed to fetch traveller record",
     });
   }
 };
 
-export const createTravelerScan = async (req: Request, res: Response) => {
+export const createTravelerRecord = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
 
@@ -393,31 +444,30 @@ export const createTravelerScan = async (req: Request, res: Response) => {
     if (identity.endDate) {
       identity.endDateSource = identity.endDateSource || "manual";
     } else {
-      const calculated = await resolveScanEndDate(identity);
+      const calculated = await resolveRecordEndDate(identity);
       if (calculated) {
         identity.endDate = calculated;
         identity.endDateSource = "calculated";
       }
     }
 
-    const created = await TravelerScan.create({
+    const created = await TravelerRecord.create({
       ...identity,
-      status: identity.status || "draft",
       scannedBy: req.user?.userId || req.user?._id,
       documents: [...fileDocs, ...base64Docs],
     });
 
     return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
-    logger.error("createTravelerScan error:", error);
+    logger.error("createTravelerRecord error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to create traveler scan",
+      message: error.message || "Failed to create traveller record",
     });
   }
 };
 
-export const updateTravelerScan = async (req: Request, res: Response) => {
+export const updateTravelerRecord = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
     const { id } = req.params;
@@ -440,7 +490,7 @@ export const updateTravelerScan = async (req: Request, res: Response) => {
     } else if (update.endDate) {
       update.endDateSource = update.endDateSource || "manual";
     } else if (body.departureDate !== undefined || body.package !== undefined) {
-      const existing = await TravelerScan.findById(id)
+      const existing = await TravelerRecord.findById(id)
         .select("departureDate package endDate endDateSource")
         .lean<{
           departureDate?: Date;
@@ -449,7 +499,7 @@ export const updateTravelerScan = async (req: Request, res: Response) => {
           endDateSource?: string;
         }>();
       if (existing && (existing.endDateSource !== "manual" || !existing.endDate)) {
-        const calculated = await resolveScanEndDate({
+        const calculated = await resolveRecordEndDate({
           departureDate: (update.departureDate as Date) ?? existing.departureDate,
           package:
             body.package !== undefined
@@ -463,7 +513,7 @@ export const updateTravelerScan = async (req: Request, res: Response) => {
       }
     }
 
-    const updated = await TravelerScan.findByIdAndUpdate(
+    const updated = await TravelerRecord.findByIdAndUpdate(
       id,
       Object.keys(unset).length ? { $set: update, $unset: unset } : { $set: update },
       { new: true, runValidators: true }
@@ -473,15 +523,15 @@ export const updateTravelerScan = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
-    logger.error("updateTravelerScan error:", error);
+    logger.error("updateTravelerRecord error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to update traveler scan",
+      message: error.message || "Failed to update traveller record",
     });
   }
 };
 
-export const addTravelerScanDocuments = async (req: Request, res: Response) => {
+export const addTravelerRecordDocuments = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
     const { id } = req.params;
@@ -512,7 +562,7 @@ export const addTravelerScanDocuments = async (req: Request, res: Response) => {
       });
     }
 
-    const updated = await TravelerScan.findByIdAndUpdate(
+    const updated = await TravelerRecord.findByIdAndUpdate(
       id,
       { $push: { documents: { $each: docs } } },
       { new: true }
@@ -522,7 +572,7 @@ export const addTravelerScanDocuments = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
-    logger.error("addTravelerScanDocuments error:", error);
+    logger.error("addTravelerRecordDocuments error:", error);
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to add documents",
@@ -530,7 +580,7 @@ export const addTravelerScanDocuments = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteTravelerScanDocument = async (
+export const deleteTravelerRecordDocument = async (
   req: Request,
   res: Response
 ) => {
@@ -544,7 +594,7 @@ export const deleteTravelerScanDocument = async (
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
 
-    const record = await TravelerScan.findById(id);
+    const record = await TravelerRecord.findById(id);
     if (!record) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -559,17 +609,17 @@ export const deleteTravelerScanDocument = async (
     try {
       await deleteImage(doc.publicId);
     } catch (err) {
-      logger.warn("Cloudinary destroy failed for traveler scan doc:", err);
+      logger.warn("Cloudinary destroy failed for traveller record doc:", err);
     }
 
-    await TravelerScan.findByIdAndUpdate(id, {
+    await TravelerRecord.findByIdAndUpdate(id, {
       $pull: { documents: { _id: docId } },
     });
-    const refreshed = await TravelerScan.findById(id);
+    const refreshed = await TravelerRecord.findById(id);
 
     return res.status(200).json({ success: true, data: refreshed });
   } catch (error: any) {
-    logger.error("deleteTravelerScanDocument error:", error);
+    logger.error("deleteTravelerRecordDocument error:", error);
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to delete document",
@@ -577,7 +627,7 @@ export const deleteTravelerScanDocument = async (
   }
 };
 
-export const deleteTravelerScan = async (req: Request, res: Response) => {
+export const deleteTravelerRecord = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
     const { id } = req.params;
@@ -585,7 +635,7 @@ export const deleteTravelerScan = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
 
-    const record = await TravelerScan.findById(id);
+    const record = await TravelerRecord.findById(id);
     if (!record) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -599,18 +649,18 @@ export const deleteTravelerScan = async (req: Request, res: Response) => {
     }
 
     if (record.guideAssignment) {
-      await unassignGuideFromScan(id);
+      await unassignGuideFromRecord(id);
     }
-    await TravelerScan.findByIdAndDelete(id);
+    await TravelerRecord.findByIdAndDelete(id);
     return res.status(200).json({
       success: true,
-      message: "Traveler scan deleted",
+      message: "Traveller record deleted",
     });
   } catch (error: any) {
-    logger.error("deleteTravelerScan error:", error);
+    logger.error("deleteTravelerRecord error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to delete traveler scan",
+      message: error.message || "Failed to delete traveller record",
     });
   }
 };

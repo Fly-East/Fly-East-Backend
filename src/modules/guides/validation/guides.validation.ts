@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { FIELD_ROLES } from "../models/team-member.model";
 import {
+  FIELD_ROLES,
   SCHEDULE_STATUSES,
   SCHEDULE_TYPES,
   UNAVAILABLE_KINDS,
-} from "../models/guideSchedule.model";
+} from "../constants/guides.constants";
 
 const dateString = z
   .string()
@@ -35,10 +35,10 @@ export const getGuideSchema = z.object(memberIdParam);
 export const upsertGuideProfileSchema = z.object({
   ...memberIdParam,
   body: z.object({
+    fieldRole: z.enum(FIELD_ROLES).optional(),
     licenseNumber: z.string().trim().optional(),
     licenseExpiry: nullableDateString,
     languages: z.array(z.string().trim()).optional(),
-    regions: z.array(z.string().trim()).optional(),
     isAvailable: z.boolean().optional(),
     unavailableReason: z.string().trim().optional(),
     notes: z.string().optional(),

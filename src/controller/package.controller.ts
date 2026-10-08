@@ -13,7 +13,7 @@ import {
   PackageInfo,
 } from "../models";
 import { getCache, setCache, clearCacheByPrefix } from "../utils/redis";
-import { parseDurationDays } from "../service/guideSchedule.service";
+import { parseDurationDays } from "../modules/guides/service/guideSchedule.service";
 
 // Cache TTL in seconds (1 hour)
 const CACHE_TTL = 60 * 60;

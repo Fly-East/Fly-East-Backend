@@ -34,6 +34,9 @@ const CATALOGUE_SEGMENTS = new Set([
   "addons",
   "package-addons",
   "useful-info",
+  "guides",
+  "guide-schedule",
+  "teammember",
 ]);
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -42,7 +45,8 @@ export const revalidateTreksPortalMiddleware: RequestHandler = (req, res, next) 
   if (!WRITE_METHODS.has(req.method)) return next();
 
   const segment = req.path.match(/^\/api\/v1\/([^/]+)/)?.[1]?.toLowerCase();
-  if (!segment || !CATALOGUE_SEGMENTS.has(segment)) return next();
+  const isGuideAssignment = /^\/api\/v1\/traveler-records\/[^/]+\/assign-guide$/.test(req.path);
+  if (!isGuideAssignment && (!segment || !CATALOGUE_SEGMENTS.has(segment))) return next();
 
   res.on("finish", () => {
     if (res.statusCode < 400) revalidateTreksPortal(`${req.method} ${req.path}`);

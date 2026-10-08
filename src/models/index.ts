@@ -13,6 +13,3 @@ export { default as HomeGallery } from "./home.gallery.model";
 export { default as PrivateTrip } from "./privateTrip.model";
 export { default as DetailedItinerary } from "./detailedItinerary.model";
 export { default as DetailedItineraryRequest } from "./detailedItineraryRequest.model";
-export { default as TravelerScan } from "./travelerScan.model";
-export { default as GuideProfile } from "./guideProfile.model";
-export { default as GuideSchedule } from "./guideSchedule.model";
