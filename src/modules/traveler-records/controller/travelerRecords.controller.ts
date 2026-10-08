@@ -4,8 +4,10 @@ import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
 import stream from "stream";
 import TravelerRecord, { TravelerRecordDocumentItem } from "../model/travelerRecord.model";
 import {
+  INSURANCE_COMPANIES,
   RECORD_GROUP_BY,
   RecordGroupBy,
+  TREKKER_GENDERS,
   TravelerDocumentKind,
   TravelerDocumentSource,
 } from "../constants/travelerRecords.constants";
@@ -309,7 +311,11 @@ export const groupTravelerRecordsHandler = async (req: Request, res: Response) =
 export const getTravelerRecordOptions = async (_req: Request, res: Response) => {
   return res.status(200).json({
     success: true,
-    data: { regions: TREKKING_REGION_OPTIONS },
+    data: {
+      regions: TREKKING_REGION_OPTIONS,
+      insuranceCompanies: INSURANCE_COMPANIES,
+      genders: TREKKER_GENDERS,
+    },
   });
 };
 
