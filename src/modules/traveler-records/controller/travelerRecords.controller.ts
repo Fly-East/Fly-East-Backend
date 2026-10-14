@@ -12,6 +12,7 @@ import {
   TravelerDocumentSource,
 } from "../constants/travelerRecords.constants";
 import { groupKeyFilter, groupTravelerRecords } from "../service/travelerRecordGroups";
+import { travelerRecordStats } from "../service/travelerRecordStats";
 import { TREKKING_REGION_OPTIONS } from "../constants/trekking-areas.constants";
 import logger from "../../../utils/logger";
 import { deleteImage } from "../../../utils/cloudinary";
@@ -226,14 +227,24 @@ function equalsIgnoreCase(value: string) {
   return { $regex: `^${escapeRegex(value.trim())}$`, $options: "i" };
 }
 
+const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const KATHMANDU_OFFSET = "+05:45";
+
+/** Plain `YYYY-MM-DD` values are Kathmandu calendar days, matching group buckets. */
+function parseRangeDay(value: unknown): Date | undefined {
+  if (!value) return undefined;
+  const s = String(value);
+  return parseOptionalDate(DAY_ONLY.test(s) ? `${s}T00:00:00${KATHMANDU_OFFSET}` : s);
+}
+
 function dateRange(from?: unknown, to?: unknown) {
   const range: Record<string, Date> = {};
-  const start = parseOptionalDate(from ? String(from) : undefined);
-  const end = parseOptionalDate(to ? String(to) : undefined);
+  const start = parseRangeDay(from);
+  const end = parseRangeDay(to);
   if (start) range.$gte = start;
   if (end) {
-    end.setUTCHours(23, 59, 59, 999);
-    range.$lte = end;
+    if (DAY_ONLY.test(String(to))) range.$lt = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+    else range.$lte = end;
   }
   return Object.keys(range).length ? range : undefined;
 }
@@ -273,24 +284,48 @@ function buildListFilter(query: Record<string, unknown>) {
   return filter;
 }
 
+/** Filter for aggregate endpoints; a fuzzy search `q` is resolved to matching ids. */
+async function buildAggregateMatch(rawQuery: Record<string, unknown>) {
+  const q = String(rawQuery.q || "").trim();
+  const { groupKey: _ignored, ...query } = rawQuery;
+  const match = buildListFilter(query);
+  if (!q) return { match, searchTruncated: false };
+
+  const candidates = await TravelerRecord.find(match)
+    .sort({ createdAt: -1 })
+    .limit(SEARCH_CANDIDATE_CAP)
+    .lean();
+  const hits = fuzzySearchRecords(candidates as Record<string, any>[], parseSearchQuery(q));
+  return {
+    match: { _id: { $in: hits.map((h) => h.record._id) } },
+    searchTruncated: candidates.length >= SEARCH_CANDIDATE_CAP,
+  };
+}
+
+export const travelerRecordStatsHandler = async (req: Request, res: Response) => {
+  try {
+    if (!requireAdminRole(req, res)) return;
+    const { match, searchTruncated } = await buildAggregateMatch(
+      req.query as Record<string, unknown>
+    );
+    const stats = await travelerRecordStats(match);
+    return res.status(200).json({ success: true, data: stats, searchTruncated });
+  } catch (error: any) {
+    logger.error("travelerRecordStats error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to load traveller stats",
+    });
+  }
+};
+
 export const groupTravelerRecordsHandler = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
     const groupBy = String(req.query.groupBy) as RecordGroupBy;
-    const q = String(req.query.q || "").trim();
-    const { groupKey: _ignored, ...query } = req.query as Record<string, unknown>;
-    let match = buildListFilter(query);
-    let searchTruncated = false;
-
-    if (q) {
-      const candidates = await TravelerRecord.find(match)
-        .sort({ createdAt: -1 })
-        .limit(SEARCH_CANDIDATE_CAP)
-        .lean();
-      const hits = fuzzySearchRecords(candidates as Record<string, any>[], parseSearchQuery(q));
-      match = { _id: { $in: hits.map((h) => h.record._id) } };
-      searchTruncated = candidates.length >= SEARCH_CANDIDATE_CAP;
-    }
+    const { match, searchTruncated } = await buildAggregateMatch(
+      req.query as Record<string, unknown>
+    );
 
     const groups = await groupTravelerRecords(match, groupBy);
     return res.status(200).json({
