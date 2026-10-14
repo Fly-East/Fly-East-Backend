@@ -13,6 +13,7 @@ import {
 } from "../constants/travelerRecords.constants";
 import { groupKeyFilter, groupTravelerRecords } from "../service/travelerRecordGroups";
 import { travelerRecordStats } from "../service/travelerRecordStats";
+import { submitTravelerRecordToJotform } from "../service/jotformSync";
 import { TREKKING_REGION_OPTIONS } from "../constants/trekking-areas.constants";
 import logger from "../../../utils/logger";
 import { deleteImage } from "../../../utils/cloudinary";
@@ -497,6 +498,10 @@ export const createTravelerRecord = async (req: Request, res: Response) => {
       scannedBy: req.user?.userId || req.user?._id,
       documents: [...fileDocs, ...base64Docs],
     });
+
+    void submitTravelerRecordToJotform(created).catch((err) =>
+      logger.error("JotForm sync failed:", err)
+    );
 
     return res.status(201).json({ success: true, data: created });
   } catch (error: any) {

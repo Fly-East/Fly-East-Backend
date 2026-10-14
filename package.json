@@ -9,7 +9,8 @@
     "start": "node dist/app.js",
     "build:start": "tsc && node dist/app.js",
     "backfill:guides": "ts-node-dev --transpile-only src/scripts/backfill-guides.ts",
-    "migrate:traveler-records": "ts-node-dev --transpile-only src/scripts/migrate-traveler-records.ts"
+    "migrate:traveler-records": "ts-node-dev --transpile-only src/scripts/migrate-traveler-records.ts",
+    "sync:jotform": "ts-node-dev --transpile-only src/scripts/syncTravelerRecordsToJotform.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^3.4.4",
