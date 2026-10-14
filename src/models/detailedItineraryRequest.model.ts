@@ -26,9 +26,21 @@ const DetailedItineraryRequestSchema = new Schema<
     pdfUrl: {
       type: String,
     },
+    status: {
+      type: String,
+      enum: ["pending", "sent", "rejected"],
+      default: "pending",
+      index: true,
+    },
     sentAt: {
       type: Date,
-      default: Date.now,
+    },
+    reviewedAt: {
+      type: Date,
+    },
+    rejectionReason: {
+      type: String,
+      trim: true,
     },
   },
   {

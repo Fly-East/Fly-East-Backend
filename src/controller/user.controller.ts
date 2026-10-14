@@ -3,14 +3,23 @@ import AppError from "../utils/appError";
 import { createUser, findUser } from "../service/user.service";
 import { generateHashedPassword } from "../utils/generateHashedPassword";
 import { CreateUserInput, LoginUserInput } from "../schema/user.schema";
-import jwt from "jsonwebtoken";
 import UserModel from "../models/user.model";
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 import { isAdminResetRole } from "../utils/adminRoles";
 import { secureCompare } from "../utils/secureCompare";
 import { trackPasswordResetAudit } from "../service/passwordResetAudit.service";
-import { AUTH_SECRET_KEY, IS_PROD, ADMIN_EMERGENCY_RESET_KEY } from "../configs/env";
+import { ADMIN_EMERGENCY_RESET_KEY } from "../configs/env";
+import {
+  clearAuthCookies,
+  getRefreshTokenFromRequest,
+  issueRefreshToken,
+  revokeAllUserRefreshTokens,
+  revokeRefreshToken,
+  rotateRefreshToken,
+  setAuthCookies,
+  signAccessToken,
+} from "../service/authToken.service";
 
 var colors = require("colors");
 
@@ -37,6 +46,7 @@ async function applyPasswordReset(
     resetPasswordExpires: undefined,
   });
   await user.save();
+  await revokeAllUserRefreshTokens(user._id);
 }
 
 export async function createUserHandler(
@@ -163,35 +173,18 @@ export async function loginUserHandler(
       req,
     });
 
-    // Create token
-    if (!AUTH_SECRET_KEY) {
-      throw new Error("AUTH_SECRET_KEY is not defined");
-    }
-
-    const accessToken = jwt.sign(
-      {
-        userId: user._id,
-        email: user.email,
-        role: user.role,
-        permissions: user.permissions,
-      },
-      AUTH_SECRET_KEY,
-      { expiresIn: "1d" }
-    );
+    const accessToken = signAccessToken(user);
+    const refreshToken = await issueRefreshToken(user._id, req);
 
     // Remove sensitive data before sending response
     const userWithoutPassword = user.toObject();
     delete userWithoutPassword.password;
     delete userWithoutPassword.verifyToken;
 
+    setAuthCookies(res, accessToken, refreshToken);
+
     return res
       .status(200)
-      .cookie("accessToken", accessToken, {
-        httpOnly: true,
-        secure: IS_PROD,
-        sameSite: "strict",
-        maxAge: 24 * 60 * 60 * 1000, // 1 day
-      })
       .json({
         status: "success",
         msg: "Login successful",
@@ -213,12 +206,52 @@ export async function logoutUserHandler(
   next: NextFunction
 ) {
   try {
+    const refreshToken = getRefreshTokenFromRequest(req);
+    if (refreshToken) {
+      await revokeRefreshToken(refreshToken);
+    }
+    clearAuthCookies(res);
     return res
       .status(200)
-      .clearCookie("accessToken")
       .json({ status: "success", msg: "Logout successful" });
   } catch (error) {
     logger.error("Logout error:", error);
+    next(new AppError("Internal server error", 500));
+  }
+}
+
+export async function refreshTokenHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const refreshToken = getRefreshTokenFromRequest(req);
+    if (!refreshToken) {
+      return res.status(401).json({
+        status: "error",
+        msg: "Refresh token is required",
+      });
+    }
+
+    const result = await rotateRefreshToken(refreshToken, req);
+    if (!result) {
+      clearAuthCookies(res);
+      return res.status(401).json({
+        status: "error",
+        msg: "Session expired. Please log in again.",
+      });
+    }
+
+    setAuthCookies(res, result.accessToken, result.refreshToken);
+
+    return res.status(200).json({
+      status: "success",
+      msg: "Token refreshed",
+      accessToken: result.accessToken,
+    });
+  } catch (error) {
+    logger.error("Refresh token error:", error);
     next(new AppError("Internal server error", 500));
   }
 }
@@ -325,6 +358,7 @@ export async function resetPasswordHandler(
     });
 
     await user.save();
+    await revokeAllUserRefreshTokens(user._id);
 
     return res.status(200).json({
       status: "success",

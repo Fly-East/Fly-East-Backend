@@ -9,6 +9,7 @@ import {
   deleteTravelerRecord,
   getTravelerRecordOptions,
   groupTravelerRecordsHandler,
+  travelerRecordStatsHandler,
 } from "../controller/travelerRecords.controller";
 import { checkPermissions, isAdmin } from "../../../middleware/isAdmin";
 import { upload, handleMulterError } from "../../../middleware/multer.middleware";
@@ -20,6 +21,7 @@ import {
   deleteTravelerRecordSchema,
   listTravelerRecordsSchema,
   groupTravelerRecordsSchema,
+  travelerRecordStatsSchema,
   addTravelerRecordDocumentsSchema,
   deleteTravelerRecordDocumentSchema,
 } from "../validation/travelerRecords.validation";
@@ -47,6 +49,14 @@ router.get(
   checkPermissions(["view"]),
   validate(groupTravelerRecordsSchema),
   groupTravelerRecordsHandler
+);
+
+router.get(
+  "/api/v1/traveler-records/stats",
+  isAdmin,
+  checkPermissions(["view"]),
+  validate(travelerRecordStatsSchema),
+  travelerRecordStatsHandler
 );
 
 router.get(

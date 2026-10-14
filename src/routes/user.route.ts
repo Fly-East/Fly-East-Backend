@@ -3,6 +3,7 @@ import {
   createUserHandler,
   loginUserHandler,
   logoutUserHandler,
+  refreshTokenHandler,
   currentUserHandler,
   resetPasswordHandler,
   forgotPasswordHandler,
@@ -42,7 +43,9 @@ router.post(
   [validate(loginUserSchema)],
   loginUserHandler
 );
+router.post("/api/v1/users/refresh", refreshTokenHandler);
 router.get("/api/v1/users/logout", logoutUserHandler);
+router.post("/api/v1/users/logout", logoutUserHandler);
 router.get("/api/v1/users/current", currentUserHandler);
 
 // User routes for reset password and  forgot password

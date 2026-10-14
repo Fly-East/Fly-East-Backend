@@ -1,7 +1,7 @@
 import * as schedule from "node-schedule";
 import FixedDate from "../models/fixedDate.model";
 import logger from "../utils/logger";
-import { revalidateTreksPortal } from "../utils/revalidateFrontend";
+import { revalidateSites } from "../utils/revalidateFrontend";
 
 export class FixedDateExpiryCron {
   static start() {
@@ -23,7 +23,7 @@ export class FixedDateExpiryCron {
           logger.info(
             `Updated ${result.modifiedCount} expired fixed dates to Closed status`
           );
-          revalidateTreksPortal("fixed-date expiry cron");
+          revalidateSites("fixed-date expiry cron");
         }
       } catch (error) {
         logger.error("Error in FixedDate Expiry Cron Job:", error);

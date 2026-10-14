@@ -175,6 +175,10 @@ export const groupTravelerRecordsSchema = z.object({
   }),
 });
 
+export const travelerRecordStatsSchema = z.object({
+  query: z.object(listQueryFields),
+});
+
 export const addTravelerRecordDocumentsSchema = z.object({
   ...idParam,
   body: z.object({

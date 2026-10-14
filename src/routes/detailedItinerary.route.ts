@@ -10,6 +10,8 @@ import {
   getDetailedItineraryPackageSchema,
   getDetailedItineraryRequestsSchema,
   getDetailedItineraryByIdSchema,
+  approveDetailedItineraryRequestSchema,
+  rejectDetailedItineraryRequestSchema,
 } from "../schema/detailedItinerary.schema";
 import {
   createDetailedItinerary,
@@ -20,6 +22,8 @@ import {
   listDetailedItineraries,
   requestDetailedItinerary,
   listDetailedItineraryRequests,
+  approveDetailedItineraryRequest,
+  rejectDetailedItineraryRequest,
 } from "../controller/detailedItinerary.controller";
 
 const router = Router();
@@ -81,6 +85,22 @@ router.get(
   isAdmin,
   validate(getDetailedItineraryRequestsSchema),
   listDetailedItineraryRequests
+);
+
+router.post(
+  "/api/v1/detailed-itinerary/requests/:id/approve",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(approveDetailedItineraryRequestSchema),
+  approveDetailedItineraryRequest
+);
+
+router.post(
+  "/api/v1/detailed-itinerary/requests/:id/reject",
+  isAdmin,
+  checkPermissions(["edit"]),
+  validate(rejectDetailedItineraryRequestSchema),
+  rejectDetailedItineraryRequest
 );
 
 router.post(
