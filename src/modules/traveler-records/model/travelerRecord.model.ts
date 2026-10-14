@@ -9,6 +9,9 @@ import {
   TravelerDocumentSource,
 } from "../constants/travelerRecords.constants";
 
+export const JOTFORM_SYNC_STATUSES = ["imported", "synced", "failed"] as const;
+export type JotformSyncStatus = (typeof JOTFORM_SYNC_STATUSES)[number];
+
 export interface TravelerRecordDocumentItem {
   _id: Types.ObjectId;
   kind: TravelerDocumentKind;
@@ -59,6 +62,13 @@ export interface TravelerRecordDocument extends Document {
   notes?: string;
   scannedBy?: Types.ObjectId;
   documents: Types.DocumentArray<TravelerRecordDocumentItem>;
+  /** JotForm state: imported from it, pushed to it, or push failed. Absent = not in JotForm. */
+  jotform?: {
+    status: JotformSyncStatus;
+    submissionId?: string;
+    syncedAt?: Date;
+    error?: string;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -133,11 +143,18 @@ const TravelerRecordSchema = new Schema<TravelerRecordDocument>(
       type: [TravelerRecordDocumentItemSchema],
       default: [],
     },
+    jotform: {
+      status: { type: String, enum: JOTFORM_SYNC_STATUSES },
+      submissionId: { type: String, trim: true },
+      syncedAt: { type: Date },
+      error: { type: String },
+    },
   },
   { timestamps: true }
 );
 
 TravelerRecordSchema.index({ createdAt: -1 });
+TravelerRecordSchema.index({ "jotform.status": 1 });
 TravelerRecordSchema.index({ "documents.publicId": 1 });
 TravelerRecordSchema.index({ email: 1 });
 
