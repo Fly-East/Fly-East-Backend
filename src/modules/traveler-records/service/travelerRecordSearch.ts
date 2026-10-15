@@ -65,8 +65,6 @@ export const SEARCH_FIELD_GROUPS: FieldGroup[] = [
     weight: 0.7,
     paths: ["documents.kind", "documents.source", "documents.deviceModel"],
   },
-  { key: "notes", aliases: ["notes", "note"], weight: 0.8, paths: ["notes"] },
-  { key: "ocr", aliases: ["ocr", "mrz", "text"], weight: 0.6, paths: ["mrzRaw"] },
   { key: "dob", aliases: ["dob", "birth", "born"], weight: 1, paths: ["dateOfBirth"], kind: "date" },
   { key: "departure", aliases: ["departure", "depart", "start"], weight: 1, paths: ["departureDate"], kind: "date" },
   { key: "booking", aliases: ["booking", "booked"], weight: 0.9, paths: ["bookingDate"], kind: "date" },
