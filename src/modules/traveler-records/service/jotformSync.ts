@@ -47,7 +47,7 @@ export type JotformRecordInput = {
   whatsappNumber?: string;
   email?: string;
   porterGuideName?: string;
-  jotform?: { status?: string } | null;
+  jotform?: { status?: string; submissionId?: string } | null;
 };
 
 type JotformConfig = { apiKey: string; formId: string; base: string };
@@ -144,6 +144,10 @@ export async function submitTravelerRecordToJotform(
   if (!config) return null;
   const status = record.jotform?.status;
   if (status === "imported" || status === "synced") return null;
+  if (status === "failed" && record.jotform?.submissionId) {
+    await updateTravelerRecordInJotform(record);
+    return record.jotform.submissionId;
+  }
 
   try {
     const content = await jotformRequest<{ submissionID?: string }>(
@@ -171,6 +175,43 @@ export async function submitTravelerRecordToJotform(
   }
 }
 
+/**
+ * Overwrites the record's linked JotForm submission with its current values.
+ * Fields left empty in the app are not cleared in JotForm.
+ * No-op when JotForm is not configured or the record has no submission.
+ * Throws on failure (after marking the record "failed", keeping the submission id for retries).
+ */
+export async function updateTravelerRecordInJotform(record: JotformRecordInput): Promise<boolean> {
+  const config = jotformConfig();
+  const submissionId = record.jotform?.submissionId;
+  if (!config || !submissionId) return false;
+
+  try {
+    await jotformRequest(config, `/submission/${submissionId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: buildSubmission(record),
+    });
+    const status = record.jotform?.status === "imported" ? "imported" : "synced";
+    await TravelerRecord.updateOne(
+      { _id: record._id },
+      { $set: { jotform: { status, submissionId, syncedAt: new Date() } } }
+    );
+    logger.info(`[jotform] record ${record._id} updated submission ${submissionId}`);
+    return true;
+  } catch (err) {
+    await TravelerRecord.updateOne(
+      { _id: record._id },
+      {
+        $set: {
+          jotform: { status: "failed", submissionId, error: `Update failed: ${(err as Error).message}` },
+        },
+      }
+    ).catch(() => undefined);
+    throw err;
+  }
+}
+
 export type JotformSubmissionSummary = {
   id: string;
   passportNumber?: string;
@@ -178,12 +219,49 @@ export type JotformSubmissionSummary = {
   departureDate?: string;
 };
 
+/** Date fields are YYYY-MM-DD. */
+export type JotformSubmission = JotformSubmissionSummary & {
+  createdAt?: string;
+  firstName?: string;
+  lastName?: string;
+  gender?: string;
+  dateOfBirth?: string;
+  nationality?: string;
+  idNumber?: string;
+  trekkingRegion?: string;
+  trekkingRoute?: string;
+  bookingDate?: string;
+  insurancePolicyNumber?: string;
+  insuranceCompany?: string;
+  insuranceCompanyOther?: string;
+  porterGuideName?: string;
+  whatsappNumber?: string;
+  email?: string;
+};
+
 type RawAnswer = { answer?: unknown; prettyFormat?: string };
-type RawSubmission = { id: string; status?: string; answers?: Record<string, RawAnswer> };
+type RawSubmission = {
+  id: string;
+  status?: string;
+  created_at?: string;
+  answers?: Record<string, RawAnswer>;
+};
 
 function answerText(a?: RawAnswer): string | undefined {
   const v = a?.answer;
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function answerPart(a: RawAnswer | undefined, part: string): string | undefined {
+  const v = a?.answer;
+  if (!v || typeof v !== "object") return undefined;
+  const value = (v as Record<string, unknown>)[part];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Phone answers are either a plain string or `{ full, area, phone }`. */
+function answerPhone(a?: RawAnswer): string | undefined {
+  return answerText(a) || answerPart(a, "full") || a?.prettyFormat?.trim() || undefined;
 }
 
 /** Date answers come as {day,month,year}, "YYYY-MM-DD…" or prettyFormat "DD-MM-YYYY". */
@@ -203,27 +281,76 @@ function answerDate(a?: RawAnswer): string | undefined {
   return undefined;
 }
 
-/** All non-deleted submissions of the configured form, reduced to the fields used for matching. */
-export async function fetchAllJotformSubmissions(): Promise<JotformSubmissionSummary[]> {
+function parseSubmission(s: RawSubmission): JotformSubmission {
+  const a = s.answers ?? {};
+  const [trekkingRegion, trekkingRoute] = (answerText(a[Q.trekkingArea]) ?? "")
+    .split(/\r?\n/)
+    .map((part) => part.trim() || undefined);
+  return {
+    id: String(s.id),
+    createdAt: s.created_at,
+    firstName: answerPart(a[Q.name], "first"),
+    lastName: answerPart(a[Q.name], "last"),
+    gender: answerText(a[Q.gender]),
+    dateOfBirth: answerDate(a[Q.dateOfBirth]),
+    nationality: answerText(a[Q.nationality]),
+    passportNumber: answerText(a[Q.passportNumber]),
+    idNumber: answerText(a[Q.idNumber]),
+    trekkingRegion,
+    trekkingRoute,
+    bookingDate: answerDate(a[Q.bookingDate]),
+    departureDate: answerDate(a[Q.departureDate]),
+    insurancePolicyNumber: answerText(a[Q.insurancePolicy]),
+    insuranceCompany: answerText(a[Q.insuranceCompany]),
+    insuranceCompanyOther: answerText(a[Q.insuranceOther]),
+    porterGuideName: answerText(a[Q.porterGuide]),
+    whatsappNumber: answerPhone(a[Q.whatsapp]),
+    email: answerText(a[Q.email])?.toLowerCase(),
+  };
+}
+
+/** All non-deleted submissions of the configured form. */
+export async function fetchAllJotformSubmissions(
+  onPage?: (pageNumber: number, received: number) => void
+): Promise<JotformSubmission[]> {
   const config = jotformConfig();
   if (!config) return [];
-  const out: JotformSubmissionSummary[] = [];
+  const out: JotformSubmission[] = [];
   for (let offset = 0; ; offset += PAGE_SIZE) {
     const page = await jotformRequest<RawSubmission[]>(
       config,
       `/form/${config.formId}/submissions?limit=${PAGE_SIZE}&offset=${offset}`
     );
+    onPage?.(offset / PAGE_SIZE + 1, page?.length ?? 0);
     for (const s of page ?? []) {
       if (s.status === "DELETED") continue;
-      out.push({
-        id: String(s.id),
-        passportNumber: answerText(s.answers?.[Q.passportNumber]),
-        departureDate: answerDate(s.answers?.[Q.departureDate]),
-      });
+      out.push(parseSubmission(s));
     }
     if (!page || page.length < PAGE_SIZE) break;
   }
   return out;
+}
+
+/** Turns a JotForm/network error into a reason an admin can act on. */
+export function explainJotformError(err: unknown): { reason: string; fatal: boolean } {
+  const message = err instanceof Error ? err.message : String(err);
+  const status = Number(/^JotForm (\d{3})/.exec(message)?.[1]);
+  if (status === 401 || status === 403) {
+    return { reason: `JotForm rejected the API key (${message}). Check JOTFORM_API_KEY has read/write access.`, fatal: true };
+  }
+  if (status === 404) {
+    return { reason: `Form not found (${message}). Check JOTFORM_FORM_ID.`, fatal: true };
+  }
+  if (status === 429 || /limit/i.test(message)) {
+    return { reason: `JotForm daily API limit reached (${message}). Try again tomorrow.`, fatal: true };
+  }
+  if (status >= 500) {
+    return { reason: `JotForm server error (${message}). Retry later.`, fatal: false };
+  }
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network/i.test(message)) {
+    return { reason: `Could not reach JotForm (${message}). Check the server's internet connection.`, fatal: true };
+  }
+  return { reason: message, fatal: false };
 }
 
 /** Match key shared by app records and JotForm submissions. */

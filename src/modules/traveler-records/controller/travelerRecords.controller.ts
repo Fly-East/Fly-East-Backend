@@ -13,7 +13,11 @@ import {
 } from "../constants/travelerRecords.constants";
 import { groupKeyFilter, groupTravelerRecords } from "../service/travelerRecordGroups";
 import { travelerRecordStats } from "../service/travelerRecordStats";
-import { submitTravelerRecordToJotform } from "../service/jotformSync";
+import {
+  JotformRecordInput,
+  submitTravelerRecordToJotform,
+  updateTravelerRecordInJotform,
+} from "../service/jotformSync";
 import { TREKKING_REGION_OPTIONS } from "../constants/trekking-areas.constants";
 import logger from "../../../utils/logger";
 import { deleteImage } from "../../../utils/cloudinary";
@@ -160,7 +164,7 @@ async function uploadBase64AsDocuments(
   return docs;
 }
 
-function requireAdminRole(req: Request, res: Response): boolean {
+export function requireAdminRole(req: Request, res: Response): boolean {
   const role = req.user?.role;
   if (role === "admin" || role === "super-admin") return true;
   res.status(403).json({
@@ -285,6 +289,35 @@ function buildListFilter(query: Record<string, unknown>) {
   return filter;
 }
 
+const SORTABLE_FIELDS = [
+  "fullName",
+  "email",
+  "departureDate",
+  "bookingDate",
+  "createdAt",
+  "passportNumber",
+] as const;
+type SortableField = (typeof SORTABLE_FIELDS)[number];
+
+function parseSort(query: Record<string, unknown>) {
+  const field = String(query.sortBy || "") as SortableField;
+  if (!SORTABLE_FIELDS.includes(field)) return undefined;
+  return { field, dir: query.sortOrder === "asc" ? 1 : -1 } as const;
+}
+
+/** Empty values always sort last, regardless of direction. */
+function compareRecords(a: Record<string, any>, b: Record<string, any>, sort: NonNullable<ReturnType<typeof parseSort>>) {
+  const av = a[sort.field];
+  const bv = b[sort.field];
+  const aEmpty = av === undefined || av === null || av === "";
+  const bEmpty = bv === undefined || bv === null || bv === "";
+  if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+  if (av instanceof Date || bv instanceof Date) {
+    return (new Date(av).getTime() - new Date(bv).getTime()) * sort.dir;
+  }
+  return String(av).localeCompare(String(bv), undefined, { sensitivity: "base" }) * sort.dir;
+}
+
 /** Filter for aggregate endpoints; a fuzzy search `q` is resolved to matching ids. */
 async function buildAggregateMatch(rawQuery: Record<string, unknown>) {
   const q = String(rawQuery.q || "").trim();
@@ -367,6 +400,7 @@ export const listTravelerRecords = async (req: Request, res: Response) => {
     const skip = (page - 1) * limit;
     const q = String(req.query.q || "").trim();
     const filter = buildListFilter(req.query as Record<string, unknown>);
+    const sort = parseSort(req.query as Record<string, unknown>);
 
     if (q) {
       const tokens = parseSearchQuery(q);
@@ -375,6 +409,7 @@ export const listTravelerRecords = async (req: Request, res: Response) => {
         .limit(SEARCH_CANDIDATE_CAP)
         .lean();
       const hits = fuzzySearchRecords(candidates as Record<string, any>[], tokens);
+      if (sort) hits.sort((a, b) => compareRecords(a.record, b.record, sort));
       const total = hits.length;
       const totalPages = Math.ceil(total / limit) || 1;
       const pageHits = hits.slice(skip, skip + limit);
@@ -402,12 +437,27 @@ export const listTravelerRecords = async (req: Request, res: Response) => {
     }
 
     const [items, total] = await Promise.all([
-      TravelerRecord.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .populate(GUIDE_ASSIGNMENT_POPULATE)
-        .lean(),
+      sort
+        ? TravelerRecord.aggregate([
+            { $match: filter },
+            {
+              $addFields: {
+                _sortEmpty: { $cond: [{ $eq: [{ $ifNull: [`$${sort.field}`, ""] }, ""] }, 1, 0] },
+              },
+            },
+            { $sort: { _sortEmpty: 1, [sort.field]: sort.dir, _id: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            { $project: { _sortEmpty: 0 } },
+          ])
+            .collation({ locale: "en", strength: 2 })
+            .then((rows) => TravelerRecord.populate(rows, GUIDE_ASSIGNMENT_POPULATE))
+        : TravelerRecord.find(filter)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .populate(GUIDE_ASSIGNMENT_POPULATE)
+            .lean(),
       TravelerRecord.countDocuments(filter),
     ]);
 
@@ -567,6 +617,18 @@ export const updateTravelerRecord = async (req: Request, res: Response) => {
     if (!updated) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
+
+    const synced = updated.toObject() as unknown as JotformRecordInput;
+    if (synced.jotform?.submissionId) {
+      void updateTravelerRecordInJotform(synced).catch((err) =>
+        logger.error("JotForm update failed:", err)
+      );
+    } else if (synced.jotform?.status === "failed") {
+      void submitTravelerRecordToJotform(synced).catch((err) =>
+        logger.error("JotForm sync failed:", err)
+      );
+    }
+
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     logger.error("updateTravelerRecord error:", error);

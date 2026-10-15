@@ -13,8 +13,24 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RecordGroupPill = { name: string; count: number };
 export type RecordGroup = { key: string; count: number; pills: RecordGroupPill[] };
 
+/** Passport numbers group case- and whitespace-insensitively. */
+function normalizedPassportExpr() {
+  return {
+    $toUpper: {
+      $replaceAll: {
+        input: { $trim: { input: { $ifNull: ["$passportNumber", ""] } } },
+        find: " ",
+        replacement: "",
+      },
+    },
+  };
+}
+
 /** Extra filter that narrows the list to a single group (dates are Kathmandu calendar days). */
 export function groupKeyFilter(groupBy: RecordGroupBy, groupKey: string): Record<string, unknown> {
+  if (groupBy === "passportNumber" && groupKey !== RECORD_GROUP_NONE) {
+    return { $expr: { $eq: [normalizedPassportExpr(), groupKey] } };
+  }
   const isDate = DATE_FIELDS.has(groupBy);
   if (groupKey === RECORD_GROUP_NONE) {
     return { [groupBy]: isDate ? null : { $in: [null, ""] } };
@@ -38,6 +54,10 @@ function nonEmptyString(field: string) {
 }
 
 function groupKeyExpr(groupBy: RecordGroupBy) {
+  if (groupBy === "passportNumber") {
+    const normalized = normalizedPassportExpr();
+    return { $cond: [{ $gt: [{ $strLenCP: normalized }, 0] }, normalized, null] };
+  }
   if (!DATE_FIELDS.has(groupBy)) return nonEmptyString(groupBy);
   return {
     $cond: [
@@ -49,14 +69,19 @@ function groupKeyExpr(groupBy: RecordGroupBy) {
 }
 
 /**
- * Counts records per group. Pills break each group down by area:
- * routes when grouped by region, regions otherwise.
+ * Counts records per group. Pills break each group down: traveller names when grouped
+ * by passport, routes when grouped by region, regions otherwise.
  */
 export async function groupTravelerRecords(
   match: Record<string, unknown>,
   groupBy: RecordGroupBy
 ): Promise<RecordGroup[]> {
-  const pillField = groupBy === "trekkingRegion" ? "trekkingRoute" : "trekkingRegion";
+  const pillField =
+    groupBy === "passportNumber"
+      ? "fullName"
+      : groupBy === "trekkingRegion"
+        ? "trekkingRoute"
+        : "trekkingRegion";
   const pipeline: PipelineStage[] = [
     { $match: match },
     { $project: { key: groupKeyExpr(groupBy), pill: nonEmptyString(pillField) } },
