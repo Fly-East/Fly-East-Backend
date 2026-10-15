@@ -11,6 +11,13 @@ import {
   groupTravelerRecordsHandler,
   travelerRecordStatsHandler,
 } from "../controller/travelerRecords.controller";
+import {
+  cancelJotformJobHandler,
+  getJotformJobHandler,
+  jotformStatusHandler,
+  startJotformImportHandler,
+  startJotformPushHandler,
+} from "../controller/jotform.controller";
 import { checkPermissions, isAdmin } from "../../../middleware/isAdmin";
 import { upload, handleMulterError } from "../../../middleware/multer.middleware";
 import { validate } from "../../../middleware/validate";
@@ -57,6 +64,41 @@ router.get(
   checkPermissions(["view"]),
   validate(travelerRecordStatsSchema),
   travelerRecordStatsHandler
+);
+
+router.get(
+  "/api/v1/traveler-records/jotform/status",
+  isAdmin,
+  checkPermissions(["view"]),
+  jotformStatusHandler
+);
+
+router.post(
+  "/api/v1/traveler-records/jotform/import",
+  isAdmin,
+  checkPermissions(["create"]),
+  startJotformImportHandler
+);
+
+router.post(
+  "/api/v1/traveler-records/jotform/push",
+  isAdmin,
+  checkPermissions(["create"]),
+  startJotformPushHandler
+);
+
+router.get(
+  "/api/v1/traveler-records/jotform/jobs/:jobId",
+  isAdmin,
+  checkPermissions(["view"]),
+  getJotformJobHandler
+);
+
+router.post(
+  "/api/v1/traveler-records/jotform/jobs/:jobId/cancel",
+  isAdmin,
+  checkPermissions(["create"]),
+  cancelJotformJobHandler
 );
 
 router.get(

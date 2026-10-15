@@ -165,6 +165,10 @@ export const listTravelerRecordsSchema = z.object({
     ...listQueryFields,
     groupBy: z.enum(RECORD_GROUP_BY).optional(),
     groupKey: z.string().optional(),
+    sortBy: z
+      .enum(["fullName", "email", "departureDate", "bookingDate", "createdAt", "passportNumber"])
+      .optional(),
+    sortOrder: z.enum(["asc", "desc"]).optional(),
   }),
 });
 
