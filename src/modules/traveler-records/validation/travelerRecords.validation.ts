@@ -110,6 +110,10 @@ export const createTravelerRecordSchema = z.object({
     .object({
       ...identityFields,
       fullName: z.string().trim().optional(),
+      passportExpiry: z
+        .string({ required_error: "Passport expiry is required" })
+        .min(1, "Passport expiry is required")
+        .refine((v) => !Number.isNaN(Date.parse(v)), "Invalid date"),
       imagesBase64: imagesBase64Field,
       kind: z.enum(TRAVELER_DOCUMENT_KINDS).optional(),
       source: z.enum(TRAVELER_DOCUMENT_SOURCES).optional(),
