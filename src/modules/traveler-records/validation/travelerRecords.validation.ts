@@ -204,6 +204,168 @@ export const deleteTravelerRecordDocumentSchema = z.object({
   }),
 });
 
+const OBJECT_ID = /^[a-f\d]{24}$/i;
+
+function optionalTextQuery(field: string) {
+  return z.any().superRefine((val, ctx) => {
+    if (val === undefined) return;
+    if (Array.isArray(val) || typeof val !== "string") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be a single value`,
+      });
+    }
+  });
+}
+
+function optionalDateQuery(field: string) {
+  return z.any().superRefine((val, ctx) => {
+    if (val === undefined || val === "") return;
+    if (Array.isArray(val) || typeof val !== "string") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be a single value`,
+      });
+      return;
+    }
+    if (Number.isNaN(Date.parse(val))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid date",
+      });
+    }
+  });
+}
+
+function optionalIntQuery(field: string, bounds: { min: number; max?: number }) {
+  return z.any().superRefine((val, ctx) => {
+    if (val === undefined || val === "") return;
+    if (Array.isArray(val) || typeof val !== "string") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be a single value`,
+      });
+      return;
+    }
+    if (!/^\d+$/.test(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be an integer`,
+      });
+      return;
+    }
+    const n = Number(val);
+    if (n < bounds.min) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be at least ${bounds.min}`,
+      });
+    }
+    if (bounds.max !== undefined && n > bounds.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be at most ${bounds.max}`,
+      });
+    }
+  });
+}
+
+function optionalEnumQuery(field: string, values: readonly string[]) {
+  return z.any().superRefine((val, ctx) => {
+    if (val === undefined || val === "") return;
+    if (Array.isArray(val) || typeof val !== "string") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be a single value`,
+      });
+      return;
+    }
+    if (!values.includes(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Invalid value. Expected ${values.join(" | ")}`,
+      });
+    }
+  });
+}
+
+function requiredEnumQuery(field: string, values: readonly string[]) {
+  return z.any().superRefine((val, ctx) => {
+    if (val === undefined || val === "") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Required" });
+      return;
+    }
+    if (Array.isArray(val) || typeof val !== "string") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} must be a single value`,
+      });
+      return;
+    }
+    if (!values.includes(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Invalid value. Expected ${values.join(" | ")}`,
+      });
+    }
+  });
+}
+
+const externalFilterFields = {
+  q: optionalTextQuery("q"),
+  page: optionalIntQuery("page", { min: 1 }),
+  limit: optionalIntQuery("limit", { min: 1, max: 100 }),
+  nationality: optionalTextQuery("nationality"),
+  trekkingRegion: optionalTextQuery("trekkingRegion"),
+  trekkingRoute: optionalTextQuery("trekkingRoute"),
+  gender: optionalTextQuery("gender"),
+  insuranceCompany: optionalTextQuery("insuranceCompany"),
+  createdFrom: optionalDateQuery("createdFrom"),
+  createdTo: optionalDateQuery("createdTo"),
+  departureFrom: optionalDateQuery("departureFrom"),
+  departureTo: optionalDateQuery("departureTo"),
+  hasDocuments: optionalEnumQuery("hasDocuments", ["true", "false"]),
+};
+
+const externalSortFields = ["fullName", "email", "departureDate", "bookingDate", "createdAt", "passportNumber"] as const;
+
+export const externalListTravelerRecordsSchema = z.object({
+  query: z
+    .object({
+      ...externalFilterFields,
+      groupBy: optionalEnumQuery("groupBy", RECORD_GROUP_BY),
+      groupKey: optionalTextQuery("groupKey"),
+      sortBy: optionalEnumQuery("sortBy", externalSortFields),
+      sortOrder: optionalEnumQuery("sortOrder", ["asc", "desc"]),
+    })
+    .strict(),
+});
+
+export const externalGroupTravelerRecordsSchema = z.object({
+  query: z
+    .object({
+      ...externalFilterFields,
+      groupBy: requiredEnumQuery("groupBy", RECORD_GROUP_BY),
+    })
+    .strict(),
+});
+
+export const externalTravelerRecordStatsSchema = z.object({
+  query: z.object(externalFilterFields).strict(),
+});
+
+export const externalTravelerRecordOptionsSchema = z.object({
+  query: z.object({}).strict(),
+});
+
+export const externalGetTravelerRecordSchema = z.object({
+  params: z
+    .object({
+      id: z.string({ required_error: "Invalid id" }).regex(OBJECT_ID, "Invalid id"),
+    })
+    .strict(),
+});
+
 export type CreateTravelerRecordInput = z.infer<typeof createTravelerRecordSchema>;
 export type UpdateTravelerRecordInput = z.infer<typeof updateTravelerRecordSchema>;
 export type ListTravelerRecordsInput = z.infer<typeof listTravelerRecordsSchema>;
