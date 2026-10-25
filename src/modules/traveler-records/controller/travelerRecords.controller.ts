@@ -4,46 +4,30 @@ import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
 import stream from "stream";
 import TravelerRecord, { TravelerRecordDocumentItem } from "../model/travelerRecord.model";
 import {
-  INSURANCE_COMPANIES,
-  RECORD_GROUP_BY,
-  RecordGroupBy,
-  TREKKER_GENDERS,
   TravelerDocumentKind,
   TravelerDocumentSource,
 } from "../constants/travelerRecords.constants";
-import { groupKeyFilter, groupTravelerRecords } from "../service/travelerRecordGroups";
-import { travelerRecordStats } from "../service/travelerRecordStats";
 import {
   JotformRecordInput,
   submitTravelerRecordToJotform,
   updateTravelerRecordInJotform,
 } from "../service/jotformSync";
-import { TREKKING_REGION_OPTIONS } from "../constants/trekking-areas.constants";
+import {
+  GUIDE_ASSIGNMENT_POPULATE,
+  readTravelerRecordById,
+  readTravelerRecordGroups,
+  readTravelerRecordList,
+  readTravelerRecordOptions,
+  readTravelerRecordStats,
+} from "../service/travelerRecordRead";
 import logger from "../../../utils/logger";
 import { deleteImage } from "../../../utils/cloudinary";
-import {
-  fuzzySearchRecords,
-  parseSearchQuery,
-} from "../service/travelerRecordSearch";
 import {
   resolveRecordEndDate,
   unassignGuideFromRecord,
 } from "../../guides/service/guideSchedule.service";
 
 const CLOUDINARY_FOLDER = "traveler-records";
-
-const GUIDE_ASSIGNMENT_POPULATE = [
-  {
-    path: "guideAssignment",
-    select: "member startDate endDate status travelerRecords shareKey",
-    populate: {
-      path: "member",
-      select: "name image isDeleted",
-      options: { withDeleted: true },
-    },
-  },
-  { path: "package", select: "name duration durationDays" },
-];
 
 type Base64ImageInput = {
   data: string;
@@ -221,129 +205,11 @@ function identityFromBody(body: Record<string, any>) {
   };
 }
 
-/** Upper bound on records scored in memory per fuzzy search request. */
-const SEARCH_CANDIDATE_CAP = 5000;
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function equalsIgnoreCase(value: string) {
-  return { $regex: `^${escapeRegex(value.trim())}$`, $options: "i" };
-}
-
-const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
-const KATHMANDU_OFFSET = "+05:45";
-
-/** Plain `YYYY-MM-DD` values are Kathmandu calendar days, matching group buckets. */
-function parseRangeDay(value: unknown): Date | undefined {
-  if (!value) return undefined;
-  const s = String(value);
-  return parseOptionalDate(DAY_ONLY.test(s) ? `${s}T00:00:00${KATHMANDU_OFFSET}` : s);
-}
-
-function dateRange(from?: unknown, to?: unknown) {
-  const range: Record<string, Date> = {};
-  const start = parseRangeDay(from);
-  const end = parseRangeDay(to);
-  if (start) range.$gte = start;
-  if (end) {
-    if (DAY_ONLY.test(String(to))) range.$lt = new Date(end.getTime() + 24 * 60 * 60 * 1000);
-    else range.$lte = end;
-  }
-  return Object.keys(range).length ? range : undefined;
-}
-
-function buildListFilter(query: Record<string, unknown>) {
-  const filter: Record<string, unknown> = {};
-  const str = (key: string) => {
-    const v = query[key];
-    return typeof v === "string" && v.trim() ? v.trim() : undefined;
-  };
-
-  for (const key of [
-    "nationality",
-    "trekkingRegion",
-    "trekkingRoute",
-    "gender",
-    "insuranceCompany",
-  ]) {
-    const v = str(key);
-    if (v) filter[key] = equalsIgnoreCase(v);
-  }
-
-  const created = dateRange(query.createdFrom, query.createdTo);
-  if (created) filter.createdAt = created;
-  const departure = dateRange(query.departureFrom, query.departureTo);
-  if (departure) filter.departureDate = departure;
-
-  const hasDocuments = str("hasDocuments");
-  if (hasDocuments === "true") filter["documents.0"] = { $exists: true };
-  if (hasDocuments === "false") filter["documents.0"] = { $exists: false };
-
-  const groupBy = str("groupBy") as RecordGroupBy | undefined;
-  const groupKey = str("groupKey");
-  if (groupBy && groupKey && RECORD_GROUP_BY.includes(groupBy)) {
-    return { $and: [filter, groupKeyFilter(groupBy, groupKey)] };
-  }
-  return filter;
-}
-
-const SORTABLE_FIELDS = [
-  "fullName",
-  "email",
-  "departureDate",
-  "bookingDate",
-  "createdAt",
-  "passportNumber",
-] as const;
-type SortableField = (typeof SORTABLE_FIELDS)[number];
-
-function parseSort(query: Record<string, unknown>) {
-  const field = String(query.sortBy || "") as SortableField;
-  if (!SORTABLE_FIELDS.includes(field)) return undefined;
-  return { field, dir: query.sortOrder === "asc" ? 1 : -1 } as const;
-}
-
-/** Empty values always sort last, regardless of direction. */
-function compareRecords(a: Record<string, any>, b: Record<string, any>, sort: NonNullable<ReturnType<typeof parseSort>>) {
-  const av = a[sort.field];
-  const bv = b[sort.field];
-  const aEmpty = av === undefined || av === null || av === "";
-  const bEmpty = bv === undefined || bv === null || bv === "";
-  if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
-  if (av instanceof Date || bv instanceof Date) {
-    return (new Date(av).getTime() - new Date(bv).getTime()) * sort.dir;
-  }
-  return String(av).localeCompare(String(bv), undefined, { sensitivity: "base" }) * sort.dir;
-}
-
-/** Filter for aggregate endpoints; a fuzzy search `q` is resolved to matching ids. */
-async function buildAggregateMatch(rawQuery: Record<string, unknown>) {
-  const q = String(rawQuery.q || "").trim();
-  const { groupKey: _ignored, ...query } = rawQuery;
-  const match = buildListFilter(query);
-  if (!q) return { match, searchTruncated: false };
-
-  const candidates = await TravelerRecord.find(match)
-    .sort({ createdAt: -1 })
-    .limit(SEARCH_CANDIDATE_CAP)
-    .lean();
-  const hits = fuzzySearchRecords(candidates as Record<string, any>[], parseSearchQuery(q));
-  return {
-    match: { _id: { $in: hits.map((h) => h.record._id) } },
-    searchTruncated: candidates.length >= SEARCH_CANDIDATE_CAP,
-  };
-}
-
 export const travelerRecordStatsHandler = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
-    const { match, searchTruncated } = await buildAggregateMatch(
-      req.query as Record<string, unknown>
-    );
-    const stats = await travelerRecordStats(match);
-    return res.status(200).json({ success: true, data: stats, searchTruncated });
+    const body = await readTravelerRecordStats(req.query as Record<string, unknown>);
+    return res.status(200).json(body);
   } catch (error: any) {
     logger.error("travelerRecordStats error:", error);
     return res.status(500).json({
@@ -356,18 +222,8 @@ export const travelerRecordStatsHandler = async (req: Request, res: Response) =>
 export const groupTravelerRecordsHandler = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
-    const groupBy = String(req.query.groupBy) as RecordGroupBy;
-    const { match, searchTruncated } = await buildAggregateMatch(
-      req.query as Record<string, unknown>
-    );
-
-    const groups = await groupTravelerRecords(match, groupBy);
-    return res.status(200).json({
-      success: true,
-      data: groups,
-      total: groups.reduce((sum, g) => sum + g.count, 0),
-      searchTruncated,
-    });
+    const body = await readTravelerRecordGroups(req.query as Record<string, unknown>);
+    return res.status(200).json(body);
   } catch (error: any) {
     logger.error("groupTravelerRecords error:", error);
     return res.status(500).json({
@@ -378,102 +234,14 @@ export const groupTravelerRecordsHandler = async (req: Request, res: Response) =
 };
 
 export const getTravelerRecordOptions = async (_req: Request, res: Response) => {
-  return res.status(200).json({
-    success: true,
-    data: {
-      regions: TREKKING_REGION_OPTIONS,
-      insuranceCompanies: INSURANCE_COMPANIES,
-      genders: TREKKER_GENDERS,
-    },
-  });
+  return res.status(200).json(readTravelerRecordOptions());
 };
 
 export const listTravelerRecords = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
-
-    const page = parseInt(String(req.query.page || "1"), 10) || 1;
-    const limit = Math.min(
-      parseInt(String(req.query.limit || "20"), 10) || 20,
-      100
-    );
-    const skip = (page - 1) * limit;
-    const q = String(req.query.q || "").trim();
-    const filter = buildListFilter(req.query as Record<string, unknown>);
-    const sort = parseSort(req.query as Record<string, unknown>);
-
-    if (q) {
-      const tokens = parseSearchQuery(q);
-      const candidates = await TravelerRecord.find(filter)
-        .sort({ createdAt: -1 })
-        .limit(SEARCH_CANDIDATE_CAP)
-        .lean();
-      const hits = fuzzySearchRecords(candidates as Record<string, any>[], tokens);
-      if (sort) hits.sort((a, b) => compareRecords(a.record, b.record, sort));
-      const total = hits.length;
-      const totalPages = Math.ceil(total / limit) || 1;
-      const pageHits = hits.slice(skip, skip + limit);
-      await TravelerRecord.populate(
-        pageHits.map((h) => h.record),
-        GUIDE_ASSIGNMENT_POPULATE
-      );
-      return res.status(200).json({
-        success: true,
-        data: pageHits.map((h) => ({
-          ...h.record,
-          searchScore: Math.round(h.score),
-          matchedFields: h.matchedFields,
-        })),
-        pagination: {
-          count: pageHits.length,
-          total,
-          page,
-          totalPages,
-          hasNextPage: page < totalPages,
-          hasPreviousPage: page > 1,
-        },
-        searchTruncated: candidates.length >= SEARCH_CANDIDATE_CAP,
-      });
-    }
-
-    const [items, total] = await Promise.all([
-      sort
-        ? TravelerRecord.aggregate([
-            { $match: filter },
-            {
-              $addFields: {
-                _sortEmpty: { $cond: [{ $eq: [{ $ifNull: [`$${sort.field}`, ""] }, ""] }, 1, 0] },
-              },
-            },
-            { $sort: { _sortEmpty: 1, [sort.field]: sort.dir, _id: -1 } },
-            { $skip: skip },
-            { $limit: limit },
-            { $project: { _sortEmpty: 0 } },
-          ])
-            .collation({ locale: "en", strength: 2 })
-            .then((rows) => TravelerRecord.populate(rows, GUIDE_ASSIGNMENT_POPULATE))
-        : TravelerRecord.find(filter)
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .populate(GUIDE_ASSIGNMENT_POPULATE)
-            .lean(),
-      TravelerRecord.countDocuments(filter),
-    ]);
-
-    const totalPages = Math.ceil(total / limit) || 1;
-    return res.status(200).json({
-      success: true,
-      data: items,
-      pagination: {
-        count: items.length,
-        total,
-        page,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPreviousPage: page > 1,
-      },
-    });
+    const body = await readTravelerRecordList(req.query as Record<string, unknown>);
+    return res.status(200).json(body);
   } catch (error: any) {
     logger.error("listTravelerRecords error:", error);
     return res.status(500).json({
@@ -486,17 +254,8 @@ export const listTravelerRecords = async (req: Request, res: Response) => {
 export const getTravelerRecordById = async (req: Request, res: Response) => {
   try {
     if (!requireAdminRole(req, res)) return;
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid id" });
-    }
-    const item = await TravelerRecord.findById(id)
-      .populate(GUIDE_ASSIGNMENT_POPULATE)
-      .lean();
-    if (!item) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-    return res.status(200).json({ success: true, data: item });
+    const result = await readTravelerRecordById(req.params.id);
+    return res.status(result.status).json(result.body);
   } catch (error: any) {
     logger.error("getTravelerRecordById error:", error);
     return res.status(500).json({

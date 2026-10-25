@@ -46,6 +46,8 @@ export const DB_CONNECTION = read("DB_CONNECTION");
 
 // Auth
 export const AUTH_SECRET_KEY = read("AUTH_SECRET_KEY");
+/** Read-only key for GET /api/v1/external/traveler-records. Unset closes those routes. */
+export const TRAVELER_RECORDS_READ_API_KEY = read("TRAVELER_RECORDS_READ_API_KEY");
 export const ADMIN_EMERGENCY_RESET_KEY = read("ADMIN_EMERGENCY_RESET_KEY");
 export const ADMIN_BOOTSTRAP_EMAIL = read("ADMIN_BOOTSTRAP_EMAIL");
 export const ADMIN_BOOTSTRAP_PASSWORD = read("ADMIN_BOOTSTRAP_PASSWORD");

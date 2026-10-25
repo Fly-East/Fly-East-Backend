@@ -20,3 +20,4 @@ export {
   TREKKING_REGION_OPTIONS,
 } from "./constants/trekking-areas.constants";
 export { default as travelerRecordsRoutes } from "./routes/travelerRecords.routes";
+export { default as externalTravelerRecordsRoutes } from "./routes/externalTravelerRecords.routes";

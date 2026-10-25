@@ -60,7 +60,7 @@ import bookingReplyRoutes from "./routes/bookingReply.routes";
 import imageRoute from "./routes/image.route";
 import NotifiRoute from "./routes/seenNotification";
 import galleryRoute from "./routes/gallery.route";
-import { travelerRecordsRoutes } from "./modules/traveler-records";
+import { externalTravelerRecordsRoutes, travelerRecordsRoutes } from "./modules/traveler-records";
 import { guidesRoutes } from "./modules/guides";
 import packageInfoRoute from "./routes/packageInfo.route";
 import searchRoute from "./routes/search.routes";
@@ -295,6 +295,7 @@ app.use(
   imageRoute,
   galleryRoute,
   travelerRecordsRoutes,
+  externalTravelerRecordsRoutes,
   guidesRoutes,
   popularRoute,
   statsRoute,
