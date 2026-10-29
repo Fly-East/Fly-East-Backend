@@ -8,6 +8,7 @@ function read(key: string): string | undefined {
   return value;
 }
 
+
 function readString(key: string, fallback = ""): string {
   return read(key) ?? fallback;
 }

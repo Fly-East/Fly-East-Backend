@@ -97,6 +97,13 @@ router.post(
   createUser
 );
 
+// router.patch(
+//   "/api/v1/users/admin/update-user/:id/permissions",
+//   isAdmin,
+//   checkPermissions(["all"]),
+//   updateUser
+// );
+
 router.patch(
   "/api/v1/users/admin/update-user/:id/permissions",
   isAdmin,
