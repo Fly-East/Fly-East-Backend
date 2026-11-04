@@ -51,6 +51,118 @@ const normalizeSeasonFromBody = (body: Record<string, unknown>): string[] => {
   }
   return [];
 };
+interface TrekRoutePointInput {
+  name: string;
+  latitude: number;
+  longitude: number;
+  altitude: number;
+}
+
+interface TrekRouteDataInput {
+  points: TrekRoutePointInput[];
+  bounds: {
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+  };
+}
+
+const parseRouteData = (raw: unknown): TrekRouteDataInput | null => {
+  if (raw === undefined || raw === null || raw === "") {
+    return null;
+  }
+
+  let parsed: unknown = raw;
+
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      throw new Error("Invalid routeData JSON format");
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("routeData must be a valid object");
+  }
+
+  const data = parsed as Record<string, any>;
+  const bounds = data.bounds;
+
+  if (!Array.isArray(data.points)) {
+    throw new Error("routeData.points must be an array");
+  }
+
+  if (!bounds || typeof bounds !== "object" || Array.isArray(bounds)) {
+    throw new Error("routeData.bounds is required");
+  }
+
+  const { north, south, east, west } = bounds;
+
+  if (
+    ![north, south, east, west].every(
+      (value) => typeof value === "number" && Number.isFinite(value)
+    ) ||
+    north < -90 ||
+    north > 90 ||
+    south < -90 ||
+    south > 90 ||
+    east < -180 ||
+    east > 180 ||
+    west < -180 ||
+    west > 180 ||
+    north <= south ||
+    east <= west
+  ) {
+    throw new Error("Invalid route bounds");
+  }
+
+  const points: TrekRoutePointInput[] = data.points.map(
+    (point: any, index: number) => {
+      if (!point || typeof point !== "object" || Array.isArray(point)) {
+        throw new Error(`Invalid route point at index ${index}`);
+      }
+
+      const { name, latitude, longitude, altitude } = point;
+
+      if (
+        typeof name !== "string" ||
+        !name.trim() ||
+        typeof latitude !== "number" ||
+        !Number.isFinite(latitude) ||
+        latitude < -90 ||
+        latitude > 90 ||
+        typeof longitude !== "number" ||
+        !Number.isFinite(longitude) ||
+        longitude < -180 ||
+        longitude > 180 ||
+        typeof altitude !== "number" ||
+        !Number.isFinite(altitude) ||
+        altitude < 0
+      ) {
+        throw new Error(`Invalid GPS route point at index ${index}`);
+      }
+
+      return {
+        name: name.trim(),
+        latitude,
+        longitude,
+        altitude,
+      };
+    }
+  );
+
+  return {
+    points,
+    bounds: {
+      north,
+      south,
+      east,
+      west,
+    },
+  };
+};
 
 // Types for cache
 interface PackageCache {
@@ -412,9 +524,12 @@ export const createPackage = async (req: Request, res: Response) => {
       meal,
     } = req.body;
 
-    const seasons = normalizeSeasonFromBody(req.body);
+  const seasons = normalizeSeasonFromBody(req.body);
 
-    if (!name) throw new Error("Name is required");
+// NEW: Parse GPS route data
+const routeData = parseRouteData(req.body.routeData);
+
+if (!name) throw new Error("Name is required");
     const normalizedAddToHome = toBoolean(addToHome);
     const normalizedIsPopular = toBoolean(isPopular);
     const normalizedPackageType = normalizePackageType(packageType);
@@ -452,9 +567,10 @@ export const createPackage = async (req: Request, res: Response) => {
       slug: slug || `${name.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`,
       elevation: Number(elevation) || 0,
       distance: Number(distance) || 0,
-      coverImage: coverImageUrl,
-      routeMap: routeMapUrl,
-      packageType: normalizedPackageType,
+     coverImage: coverImageUrl,
+routeMap: routeMapUrl,
+routeData: routeData ?? undefined,
+packageType: normalizedPackageType,
       sortOrder,
       activity,
       groupSize,
@@ -788,11 +904,14 @@ export const updatePackage = async (req: Request, res: Response) => {
       const parsedDays = parseDurationDays(req.body.duration);
       if (parsedDays) updateData.durationDays = parsedDays;
     }
+if (req.body.season !== undefined) {
+  updateData.season = normalizeSeasonFromBody(req.body);
+}
 
-    if (req.body.season !== undefined) {
-      updateData.season = normalizeSeasonFromBody(req.body);
-    }
-
+// Handle package-specific GPS route data
+if (req.body.routeData !== undefined) {
+  updateData.routeData = parseRouteData(req.body.routeData);
+}
     // Handle cover image update if provided
     if (files?.coverImage?.[0]?.buffer) {
       try {
@@ -914,7 +1033,11 @@ export const updatePackage = async (req: Request, res: Response) => {
     const updatedPackage = await Package.findByIdAndUpdate(
       req.params.id,
       updateData,
-      { new: true, session }
+      { 
+  new: true,
+  session,
+  runValidators: true,
+}
     );
 
     if (!updatedPackage) {

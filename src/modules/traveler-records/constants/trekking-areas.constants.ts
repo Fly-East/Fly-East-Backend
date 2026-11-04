@@ -7,6 +7,7 @@ export const TREKKING_AREAS: Record<string, string[]> = {
     "Mardi Himal",
     "Upper Mustang",
     "Narphu Valley",
+    "Lower Mustang",
   ],
   Everest: ["Three Passes", "EBC", "EBC with Gokyo", "Pikey Peak"],
   Langtang: [
