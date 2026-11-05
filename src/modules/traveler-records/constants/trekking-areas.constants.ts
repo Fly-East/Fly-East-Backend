@@ -8,6 +8,8 @@ export const TREKKING_AREAS: Record<string, string[]> = {
     "Upper Mustang",
     "Narphu Valley",
     "Lower Mustang",
+    "Khopra",
+    "Kapuche-Kori",
   ],
   Everest: ["Three Passes", "EBC", "EBC with Gokyo", "Pikey Peak"],
   Langtang: [
@@ -15,10 +17,12 @@ export const TREKKING_AREAS: Record<string, string[]> = {
     "Gosainkunda",
     "Tamang Heritage",
     "Langtang Valley & Gosainkunda",
+    "Langtang and Gosaikunda Trek with Lauribina Pass",
   ],
   Kanchenjunga: ["Kanchenjunga Base Camp"],
   Manaslu: ["Manaslu Circuit", "Manaslu with Tsum Valley", "Tsum Valley"],
   Rolwaling: [],
+  Dhaulagiri: ["Dhaulagiri Circuit Trek"],
 };
 
 export type TrekkingRegionOption = { name: string; routes: string[] };

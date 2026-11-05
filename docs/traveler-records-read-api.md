@@ -268,7 +268,7 @@ curl -sS \
   "success": true,
   "data": {
     "regions": [
-      { "name": "Annapurna", "routes": ["Annapurna Circuit", "Poonhill", "ABC", "Mardi Himal", "Upper Mustang", "Narphu Valley"] },
+      { "name": "Annapurna", "routes": ["Annapurna Circuit", "Poonhill", "ABC", "Mardi Himal", "Upper Mustang", "Narphu Valley","Lower Mustang"] },
       { "name": "Everest", "routes": ["Three Passes", "EBC", "EBC with Gokyo", "Pikey Peak"] },
       { "name": "Langtang", "routes": ["Langtang Valley", "Gosainkunda", "Tamang Heritage", "Langtang Valley & Gosainkunda"] },
       { "name": "Kanchenjunga", "routes": ["Kanchenjunga Base Camp"] },
