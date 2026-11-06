@@ -1,3 +1,4 @@
+
 import { RequestHandler } from "express";
 import sanitizeHtml from "sanitize-html";
 
@@ -25,7 +26,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 
 const sanitizeValue = (value: unknown): unknown => {
   if (typeof value === "string") {
-    return sanitizeHtml(value, sanitizeOptions);
+    return sanitizeHtml(value, sanitizeOptions).replace(/&amp;/g, "&");
   }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeValue(item));
