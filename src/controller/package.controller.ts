@@ -164,6 +164,47 @@ const parseRouteData = (raw: unknown): TrekRouteDataInput | null => {
   };
 };
 
+// NEW: route map area chosen in the admin ("Route map area" picker).
+type RouteMapFocusInput = { x: number; y: number; width: number; height: number };
+
+/** undefined = not sent (keep old value), null = clear (show the full map). */
+const parseRouteMapFocus = (
+  raw: unknown
+): RouteMapFocusInput | null | undefined => {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "" || raw === "null") return null;
+
+  let parsed: unknown = raw;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      throw new Error("Invalid routeMapFocus JSON format");
+    }
+  }
+  if (parsed === null) return null;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("routeMapFocus must be an object");
+  }
+
+  const { x, y, width, height } = parsed as Record<string, unknown>;
+  const nums = [x, y, width, height].map(Number);
+  if (nums.some((n) => !Number.isFinite(n) || n < 0 || n > 100)) {
+    throw new Error("routeMapFocus values must be numbers from 0 to 100");
+  }
+  const [fx, fy, fw, fh] = nums;
+  if (fw < 1 || fh < 1) {
+    throw new Error("routeMapFocus width and height must be at least 1");
+  }
+  const round = (n: number) => Math.round(n * 10) / 10;
+  return {
+    x: round(fx),
+    y: round(fy),
+    width: round(Math.min(fw, 100 - fx)),
+    height: round(Math.min(fh, 100 - fy)),
+  };
+};
+
 // Types for cache
 interface PackageCache {
   data: any[];
@@ -529,6 +570,9 @@ export const createPackage = async (req: Request, res: Response) => {
 // NEW: Parse GPS route data
 const routeData = parseRouteData(req.body.routeData);
 
+// NEW: route map area chosen in the admin (null = full map)
+const routeMapFocus = parseRouteMapFocus(req.body.routeMapFocus) ?? null;
+
 if (!name) throw new Error("Name is required");
     const normalizedAddToHome = toBoolean(addToHome);
     const normalizedIsPopular = toBoolean(isPopular);
@@ -570,6 +614,7 @@ if (!name) throw new Error("Name is required");
      coverImage: coverImageUrl,
 routeMap: routeMapUrl,
 routeData: routeData ?? undefined,
+routeMapFocus,
 packageType: normalizedPackageType,
       sortOrder,
       activity,
@@ -912,6 +957,17 @@ if (req.body.season !== undefined) {
 if (req.body.routeData !== undefined) {
   updateData.routeData = parseRouteData(req.body.routeData);
 }
+
+    // NEW: route map area chosen in the admin (null = full map)
+    if (req.body.routeMapFocus !== undefined) {
+      try {
+        updateData.routeMapFocus = parseRouteMapFocus(req.body.routeMapFocus);
+      } catch (e: any) {
+        await session.abortTransaction();
+        return res.status(400).json({ status: "error", message: e.message });
+      }
+    }
+
     // Handle cover image update if provided
     if (files?.coverImage?.[0]?.buffer) {
       try {

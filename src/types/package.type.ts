@@ -52,7 +52,8 @@ export interface PackageType extends Document {
   attraction: Types.ObjectId[];
   exclusion: Types.ObjectId[];
   inclusion: Types.ObjectId[];
-  routeMap: string;
+    routeMap?: string;
+  routeMapFocus?: { x: number; y: number; width: number; height: number } | null;   // ← new
   pax: Types.ObjectId[];
   gallery: string[];
   top10Trek: boolean;
