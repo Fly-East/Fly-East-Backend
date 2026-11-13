@@ -419,6 +419,7 @@ const buildPackageSummary = async (packageDoc: PackageDocument) => {
     subCategoryId: packageDoc.subCategoryId,
     fixedDates: await getFixedDatesForPackage(packageDoc._id),
     slug: packageDoc.slug,
+     routeMap: packageDoc.routeMap, // ADD THIS LINE
     coverImage: packageDoc.coverImage,
     difficulty: packageDoc.difficulty || "",
     duration: packageDoc.duration,
