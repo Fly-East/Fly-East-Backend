@@ -1,71 +1,110 @@
+
 import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
 import axios from "axios";
 import fs from "fs";
+import { Readable } from "stream";
 import { extractPublicId } from "cloudinary-build-url";
 import dotenv from "dotenv";
 import logger from "./logger";
 
-// Extend the UploadApiResponse to include the url property
+dotenv.config();
+
+// Extend Cloudinary response.
 interface CloudinaryUploadResponse extends UploadApiResponse {
   url: string;
   secure_url: string;
   public_id: string;
 }
-dotenv.config();
 
+// Configure Cloudinary.
 cloudinary.config({
   cloud_name: process.env.Cloudinary_Cloud_Name,
   api_key: process.env.Cloudinary_API_Key,
   api_secret: process.env.Cloudinary_API_Secret,
 });
 
+// Upload options.
 interface UploadOptions {
   filename?: string;
   contentType?: string;
+  folder?: string;
+  resourceType?: "image" | "video" | "raw" | "auto";
 }
 
+/**
+ * Uploads a file to Cloudinary.
+ *
+ * Supports:
+ * - Buffer files from Multer memoryStorage
+ * - Local file paths
+ * - Images
+ * - Videos
+ * - Raw files
+ */
 const uploadOnCloudinary = async (
   file: string | Buffer,
   options?: UploadOptions
 ): Promise<CloudinaryUploadResponse | null> => {
   try {
-    if (!file) return null;
+    if (!file || (Buffer.isBuffer(file) && file.length === 0)) {
+      return null;
+    }
 
-    let response;
+    const resourceType = options?.resourceType ?? "auto";
+    const folder = options?.folder ?? "travel-packages";
 
+    const uploadOptions = {
+      resource_type: resourceType,
+      filename_override: options?.filename,
+      folder,
+      use_filename: true,
+      unique_filename: true,
+    };
+
+    let response: CloudinaryUploadResponse;
+
+    // Buffer upload: Multer memoryStorage.
     if (Buffer.isBuffer(file)) {
-      response = await new Promise<CloudinaryUploadResponse>((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          {
-            resource_type: "auto",
-            filename_override: options?.filename,
-            folder: "travel-packages",
-            use_filename: true,
-            unique_filename: true,
-          },
-          (error, result) => {
-            if (error) {
-              reject(error);
-            } else if (!result) {
-              reject(new Error("No result from Cloudinary"));
-            } else {
+      response = await new Promise<CloudinaryUploadResponse>(
+        (resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            uploadOptions,
+            (error, result) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+
+              if (!result) {
+                reject(
+                  new Error("No result returned from Cloudinary")
+                );
+                return;
+              }
+
               resolve(result as CloudinaryUploadResponse);
             }
-          }
-        );
+          );
 
-        const bufferStream = require("stream").Readable.from(file);
-        bufferStream.pipe(uploadStream);
-      });
+          // Important: Send the entire Buffer as one stream chunk.
+          Readable.from([file]).pipe(uploadStream);
+        }
+      );
     } else {
-      response = await cloudinary.uploader.upload(file, {
-        resource_type: "auto",
-      });
+      // Local file path upload.
+      response = (await cloudinary.uploader.upload(
+        file,
+        uploadOptions
+      )) as CloudinaryUploadResponse;
 
+      // Delete temporary local file after successful upload.
       try {
         fs.unlinkSync(file);
-      } catch (e) {
-        logger.error("Error deleting temp file:", e);
+      } catch (error) {
+        logger.error(
+          "Error deleting temporary file:",
+          error
+        );
       }
     }
 
@@ -76,23 +115,43 @@ const uploadOnCloudinary = async (
   }
 };
 
+/**
+ * Deletes an asset from Cloudinary.
+ *
+ * Use resourceType "video" for videos.
+ * Use resourceType "image" for images.
+ */
 export const deleteImage = async (
   publicId: string,
-  options?: { resourceType?: "image" | "video" | "raw" | "auto" }
+  options?: {
+    resourceType?: "image" | "video" | "raw" | "auto";
+  }
 ) => {
   try {
+    if (!publicId) {
+      return null;
+    }
+
     const result = await cloudinary.uploader.destroy(publicId, {
       resource_type: options?.resourceType ?? "image",
     });
+
     return result;
   } catch (error) {
-    logger.error("Error deleting image:", error);
+    logger.error("Error deleting Cloudinary asset:", error);
     throw error;
   }
 };
 
+/**
+ * Extracts Cloudinary public ID from an asset URL.
+ */
 export const getPublicId = (imageUrl: string): string | null => {
   try {
+    if (!imageUrl) {
+      return null;
+    }
+
     return extractPublicId(imageUrl);
   } catch (error) {
     logger.error("Error extracting public ID:", error);
@@ -100,6 +159,7 @@ export const getPublicId = (imageUrl: string): string | null => {
   }
 };
 
+// Download options.
 type DownloadCloudinaryAssetOptions = {
   url: string;
   publicId: string;
@@ -107,8 +167,11 @@ type DownloadCloudinaryAssetOptions = {
 };
 
 /**
- * Downloads a Cloudinary asset. Falls back to signed / private download URLs
- * when the public URL returns 401 (common for restricted PDFs).
+ * Downloads a Cloudinary asset.
+ *
+ * First attempts the original URL.
+ * Falls back to signed/private download URLs
+ * when the public URL returns 401 or fails.
  */
 export async function downloadCloudinaryAsset(
   options: DownloadCloudinaryAssetOptions
@@ -118,30 +181,39 @@ export async function downloadCloudinaryAsset(
       responseType: "arraybuffer",
       timeout: 30_000,
     });
+
     return Buffer.from(response.data);
   };
 
+  // First attempt: original URL.
   try {
     return await tryGet(options.url);
-  } catch (directErr) {
+  } catch (directError) {
     logger.warn(
-      `[cloudinary] Direct download failed for ${options.publicId}, trying signed URLs: ${directErr}`
+      `[cloudinary] Direct download failed for ${options.publicId}, trying signed URLs: ${directError}`
     );
   }
 
   const resourceTypes = Array.from(
     new Set(
-      [options.resourceType, "raw", "image", "auto"].filter(
-        (v): v is string => Boolean(v)
+      [options.resourceType, "raw", "image", "video", "auto"].filter(
+        (value): value is string => Boolean(value)
       )
     )
   );
 
   const formatGuess =
-    options.url.split(".").pop()?.split(/[?#]/)[0]?.toLowerCase() || "pdf";
+    options.url
+      .split(".")
+      .pop()
+      ?.split(/[?#]/)[0]
+      ?.toLowerCase() || "pdf";
 
-  let lastErr: unknown;
+  let lastError: unknown;
+
+  // Try signed and private download URLs.
   for (const resource_type of resourceTypes) {
+    // Signed URL.
     try {
       const signedUrl = cloudinary.url(options.publicId, {
         resource_type,
@@ -149,45 +221,60 @@ export async function downloadCloudinaryAsset(
         sign_url: true,
         secure: true,
       });
+
       return await tryGet(signedUrl);
-    } catch (err) {
-      lastErr = err;
+    } catch (error) {
+      lastError = error;
     }
 
+    // Signed URL with format.
     try {
-      const signedPdfUrl = cloudinary.url(options.publicId, {
-        resource_type,
-        type: "upload",
-        sign_url: true,
-        secure: true,
-        format: formatGuess,
-      });
-      return await tryGet(signedPdfUrl);
-    } catch (err) {
-      lastErr = err;
+      const signedUrlWithFormat = cloudinary.url(
+        options.publicId,
+        {
+          resource_type,
+          type: "upload",
+          sign_url: true,
+          secure: true,
+          format: formatGuess,
+        }
+      );
+
+      return await tryGet(signedUrlWithFormat);
+    } catch (error) {
+      lastError = error;
     }
 
+    // Private download URL.
     try {
       const privateUrl = cloudinary.utils.private_download_url(
         options.publicId,
         formatGuess,
-        { resource_type, type: "upload" }
+        {
+          resource_type,
+          type: "upload",
+        }
       );
+
       return await tryGet(privateUrl);
-    } catch (err) {
-      lastErr = err;
+    } catch (error) {
+      lastError = error;
     }
   }
 
-  // Last resort: Admin API download endpoint (authenticated with API key/secret)
+  // Last resort: Cloudinary Admin API.
   for (const resource_type of resourceTypes) {
     try {
       const cloudName = process.env.Cloudinary_Cloud_Name;
       const apiKey = process.env.Cloudinary_API_Key;
       const apiSecret = process.env.Cloudinary_API_Secret;
-      if (!cloudName || !apiKey || !apiSecret) break;
+
+      if (!cloudName || !apiKey || !apiSecret) {
+        break;
+      }
 
       const adminUrl = `https://api.cloudinary.com/v1_1/${cloudName}/resources/${resource_type}/download`;
+
       const response = await axios.post(
         adminUrl,
         new URLSearchParams({
@@ -196,22 +283,30 @@ export async function downloadCloudinaryAsset(
           type: "upload",
         }).toString(),
         {
-          auth: { username: apiKey, password: apiSecret },
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          auth: {
+            username: apiKey,
+            password: apiSecret,
+          },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
           responseType: "arraybuffer",
           timeout: 30_000,
           maxRedirects: 5,
         }
       );
+
       return Buffer.from(response.data);
-    } catch (err) {
-      lastErr = err;
+    } catch (error) {
+      lastError = error;
     }
   }
 
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error(`Failed to download Cloudinary asset ${options.publicId}`);
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(
+        `Failed to download Cloudinary asset ${options.publicId}`
+      );
 }
 
 export { uploadOnCloudinary };
