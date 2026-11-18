@@ -1,4 +1,6 @@
+
 import { QueueOptions } from "bullmq";
+import { REDIS_ENABLED } from "../configs/env";
 import { redisConfig } from "../configs/redis.config";
 
 const envSuffix = process.env.NODE_ENV
@@ -7,6 +9,8 @@ const envSuffix = process.env.NODE_ENV
 
 export const buildQueueName = (baseName: string): string =>
   `${baseName}-${envSuffix}`;
+
+export const isBullMQEnabled = (): boolean => REDIS_ENABLED;
 
 export const getBullmqQueueOptions = (): QueueOptions => ({
   connection: {

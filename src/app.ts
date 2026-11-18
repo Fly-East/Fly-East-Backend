@@ -459,6 +459,7 @@ async function createAdminIfNotPresent() {
   }
 }
 
+console.log("REDIS_ENABLED VALUE:", process.env.REDIS_ENABLED);
 connectRedis()
   .then((connected) => {
     if (connected) logger.info("Redis cache is enabled");
