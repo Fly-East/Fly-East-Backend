@@ -1,9 +1,11 @@
+
 import mongoose, { Document, Schema, Types } from "mongoose";
 
 export interface IRefreshToken extends Document {
   user: Types.ObjectId;
   tokenHash: string;
   expiresAt: Date;
+  sessionExpiresAt: Date;
   revokedAt?: Date;
   replacedByHash?: string;
   ip: string;
@@ -29,6 +31,10 @@ const RefreshTokenSchema = new Schema<IRefreshToken>(
       type: Date,
       required: true,
     },
+    sessionExpiresAt: {
+      type: Date,
+      required: true,
+    },
     revokedAt: {
       type: Date,
     },
@@ -47,7 +53,7 @@ const RefreshTokenSchema = new Schema<IRefreshToken>(
   { timestamps: true }
 );
 
-// MongoDB deletes expired documents automatically.
+// MongoDB automatically deletes expired refresh-token records.
 RefreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export default mongoose.models.RefreshToken ||

@@ -243,7 +243,12 @@ export async function refreshTokenHandler(
       });
     }
 
-    setAuthCookies(res, result.accessToken, result.refreshToken);
+    setAuthCookies(
+  res,
+  result.accessToken,
+  result.refreshToken,
+  result.sessionExpiresAt
+);
 
     return res.status(200).json({
       status: "success",
