@@ -1,8 +1,10 @@
+
 import { Job, Worker } from "bullmq";
 import logger from "../../../utils/logger";
 import {
   buildQueueName,
   getBullmqQueueOptions,
+  isBullMQEnabled,
 } from "../../../queues/bull.config";
 import { getChannelProvider } from "../channels/channel.registry";
 import { NotificationJobPayload } from "../types/notifications.types";
@@ -13,6 +15,11 @@ export class NotificationWorker {
   private static running = false;
 
   static start(): void {
+    if (!isBullMQEnabled()) {
+      logger.info("Notification worker skipped because Redis is disabled");
+      return;
+    }
+
     if (this.running) return;
     this.running = true;
 
@@ -42,9 +49,15 @@ export class NotificationWorker {
 
         if (result.status === "failed") {
           if (result.shouldFallback) {
-            await NotificationService.dispatchFallback(job.data, result.error);
+            await NotificationService.dispatchFallback(
+              job.data,
+              result.error
+            );
           }
-          throw new Error(result.error ?? "Notification delivery failed");
+
+          throw new Error(
+            result.error ?? "Notification delivery failed"
+          );
         }
 
         logger.info(
@@ -57,6 +70,7 @@ export class NotificationWorker {
     worker.on("failed", (job, err) => {
       const jobId = job?.id ?? "<unknown>";
       const recipient = job?.data?.to ?? "<unknown>";
+
       logger.error(
         `Notification job ${jobId} failed for ${recipient}: ${
           err?.message ?? "unexpected error"

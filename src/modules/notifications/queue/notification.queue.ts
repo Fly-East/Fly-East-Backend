@@ -1,7 +1,9 @@
+
 import { Queue } from "bullmq";
 import {
   buildQueueName,
   getBullmqQueueOptions,
+  isBullMQEnabled,
 } from "../../../queues/bull.config";
 import {
   NotificationEmailAttachment,
@@ -9,13 +11,7 @@ import {
 } from "../types/notifications.types";
 
 const QUEUE_NAME = buildQueueName("notification-queue");
-const QUEUE_OPTIONS = getBullmqQueueOptions();
 
-/**
- * BullMQ JSON-serializes job data. Raw Buffers become `{ type: "Buffer", data: [...] }`
- * and are not restored as Buffers — which produces 0-byte email attachments.
- * Always store attachment bytes as base64 strings in the queue.
- */
 function serializeAttachments(
   attachments?: NotificationEmailAttachment[]
 ): NotificationEmailAttachment[] | undefined {
@@ -37,8 +33,8 @@ function serializeAttachments(
       };
     }
 
-    // Runtime shapes that may arrive before/after JSON serialization
     const maybe = attachment.content as unknown;
+
     if (maybe instanceof Uint8Array) {
       return {
         ...attachment,
@@ -47,7 +43,6 @@ function serializeAttachments(
       };
     }
 
-    // Already a serialized Node Buffer shape from a previous hop
     if (
       maybe &&
       typeof maybe === "object" &&
@@ -66,7 +61,9 @@ function serializeAttachments(
     return {
       ...attachment,
       content:
-        typeof attachment.content === "string" ? attachment.content : "",
+        typeof attachment.content === "string"
+          ? attachment.content
+          : "",
       encoding: "base64" as const,
     };
   });
@@ -82,13 +79,32 @@ function serializePayload(
 }
 
 export class NotificationQueue {
-  private static queue = new Queue<NotificationJobPayload>(
-    QUEUE_NAME,
-    QUEUE_OPTIONS
-  );
+  private static queue: Queue<NotificationJobPayload> | null = null;
 
-  static async addJob(payload: NotificationJobPayload): Promise<void> {
-    await this.queue.add("send-notification", serializePayload(payload));
+  private static getQueue(): Queue<NotificationJobPayload> {
+    if (!isBullMQEnabled()) {
+      throw new Error(
+        "Notification queue is disabled because Redis is disabled"
+      );
+    }
+
+    if (!this.queue) {
+      this.queue = new Queue<NotificationJobPayload>(
+        QUEUE_NAME,
+        getBullmqQueueOptions()
+      );
+    }
+
+    return this.queue;
+  }
+
+  static async addJob(
+    payload: NotificationJobPayload
+  ): Promise<void> {
+    await this.getQueue().add(
+      "send-notification",
+      serializePayload(payload)
+    );
   }
 
   static async addBulkJobs(
@@ -96,7 +112,7 @@ export class NotificationQueue {
   ): Promise<void> {
     if (payloads.length === 0) return;
 
-    await this.queue.addBulk(
+    await this.getQueue().addBulk(
       payloads.map((data) => ({
         name: "send-notification",
         data: serializePayload(data),

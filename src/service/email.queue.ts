@@ -1,12 +1,13 @@
+
 import { Queue } from "bullmq";
 import { EmailJob, QueueAttachment } from "../types/emailJob.type";
 import {
   buildQueueName,
   getBullmqQueueOptions,
+  isBullMQEnabled,
 } from "../queues/bull.config";
 
 const QUEUE_NAME = buildQueueName("email-queue");
-const QUEUE_OPTIONS = getBullmqQueueOptions();
 
 const serializeAttachments = (
   attachments?: EmailJob["attachments"]
@@ -43,10 +44,33 @@ const buildJobPayload = (
 });
 
 export class EmailQueue {
-  private static queue = new Queue<EmailJob>(QUEUE_NAME, QUEUE_OPTIONS);
+  private static queue: Queue<EmailJob> | null = null;
 
-  static async addEmail(to: string, payload: Omit<EmailJob, "to">): Promise<void> {
-    await this.queue.add("send-email", buildJobPayload(to, payload));
+  private static getQueue(): Queue<EmailJob> {
+    if (!isBullMQEnabled()) {
+      throw new Error(
+        "Email queue is disabled because Redis is disabled"
+      );
+    }
+
+    if (!this.queue) {
+      this.queue = new Queue<EmailJob>(
+        QUEUE_NAME,
+        getBullmqQueueOptions()
+      );
+    }
+
+    return this.queue;
+  }
+
+  static async addEmail(
+    to: string,
+    payload: Omit<EmailJob, "to">
+  ): Promise<void> {
+    await this.getQueue().add(
+      "send-email",
+      buildJobPayload(to, payload)
+    );
   }
 
   static async addBulkEmails(
@@ -60,6 +84,6 @@ export class EmailQueue {
       data: buildJobPayload(to, payload),
     }));
 
-    await this.queue.addBulk(jobs);
+    await this.getQueue().addBulk(jobs);
   }
 }

@@ -1,3 +1,4 @@
+
 import { Job, Worker } from "bullmq";
 import type { Transporter } from "nodemailer";
 import { EmailJob } from "../types/emailJob.type";
@@ -5,6 +6,7 @@ import logger from "../utils/logger";
 import {
   buildQueueName,
   getBullmqQueueOptions,
+  isBullMQEnabled,
 } from "../queues/bull.config";
 import { getEmailConfig, getEmailTransporter } from "../modules/email";
 import type { EmailConfig } from "../modules/email/email.config";
@@ -33,15 +35,22 @@ export class EmailWorker {
   private static running = false;
 
   static start() {
+    if (!isBullMQEnabled()) {
+      logger.info("Email worker skipped because Redis is disabled");
+      return;
+    }
+
     if (this.running) return;
     this.running = true;
 
     let transporter: Transporter;
     let emailConfig: EmailConfig;
+
     try {
       transporter = getEmailTransporter();
       emailConfig = getEmailConfig();
     } catch (error) {
+      this.running = false;
       logger.error("Unable to initialize email transporter", error);
       return;
     }
@@ -60,6 +69,7 @@ export class EmailWorker {
                 job.data.templateData ?? {}
               )
             : undefined);
+
         const text = job.data.text;
 
         if (!html && !text) {
@@ -81,6 +91,7 @@ export class EmailWorker {
           bcc: job.data.bcc,
           replyTo: job.data.replyTo,
         });
+
         logger.info(`Email delivered to ${job.data.to}`);
       },
       queueOptions
@@ -89,6 +100,7 @@ export class EmailWorker {
     worker.on("failed", (job, err) => {
       const jobId = job?.id ?? "<unknown>";
       const recipient = job?.data?.to ?? "<unknown recipient>";
+
       logger.error(
         `Email job ${jobId} failed for ${recipient}: ${
           err?.message ?? "an unexpected error"
