@@ -1807,10 +1807,19 @@ function generateSlug(value: string): string {
 function isValidObjectId(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    /^[a-fA-F0-9]{24}$/.test(value)
+    /^[a-fA-F0-9]{24}$/.test(value.trim())
   );
 }
 
+/**
+ * Parses multipart FormData array fields.
+ *
+ * Supports:
+ * 1. JSON string: '["id1","id2"]'
+ * 2. Already parsed array: ["id1", "id2"]
+ * 3. Nested JSON string arrays.
+ * 4. Repeated multipart fields containing individual values.
+ */
 function parseArrayField<T>(
   value: unknown,
   fieldName: string
@@ -1824,16 +1833,42 @@ function parseArrayField<T>(
   }
 
   try {
-    const parsed =
-      typeof value === "string"
-        ? JSON.parse(value)
-        : value;
+    let parsed: unknown = value;
 
-    if (!Array.isArray(parsed)) {
-      throw new Error("Expected an array");
+    for (
+      let i = 0;
+      i < 3 && typeof parsed === "string";
+      i++
+    ) {
+      const trimmed = parsed.trim();
+
+      if (!trimmed) {
+        return undefined;
+      }
+
+      parsed = JSON.parse(trimmed);
     }
 
-    return parsed as T[];
+    if (Array.isArray(parsed)) {
+      if (
+        parsed.length === 1 &&
+        typeof parsed[0] === "string"
+      ) {
+        const firstValue = parsed[0].trim();
+
+        if (firstValue.startsWith("[")) {
+          const nested = JSON.parse(firstValue);
+
+          if (Array.isArray(nested)) {
+            parsed = nested;
+          }
+        }
+      }
+
+      return parsed as T[];
+    }
+
+    throw new Error("Expected an array");
   } catch {
     throw new AppError(
       `Invalid ${fieldName} format`,
@@ -2078,22 +2113,102 @@ function validateRelatedPackages(
     );
   }
 
-  if (!packageIds.every(isValidObjectId)) {
+  const normalizedIds = packageIds.map((id) =>
+    typeof id === "string" ? id.trim() : id
+  );
+
+  if (!normalizedIds.every(isValidObjectId)) {
     throw new AppError(
       "One or more related package IDs are invalid",
       400
     );
   }
 
-  return packageIds.map(
+  const uniqueIds = [...new Set(normalizedIds)];
+
+  return uniqueIds.map(
     (id) => new mongoose.Types.ObjectId(id)
   );
 }
 
-// NEW: VALIDATE RELATED ARTICLES
+// ------------------------------------------------------
+// RELATED ARTICLES VALIDATION
+// ------------------------------------------------------
+
+function normalizeRelatedArticleIds(
+  value: unknown,
+  depth = 0
+): string[] {
+  if (
+    value === undefined ||
+    value === null ||
+    depth > 5
+  ) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) =>
+      normalizeRelatedArticleIds(item, depth + 1)
+    );
+  }
+
+  if (value instanceof mongoose.Types.ObjectId) {
+    return [value.toString()];
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+
+    if (!trimmed) {
+      return [];
+    }
+
+    if (
+      trimmed.startsWith("[") ||
+      trimmed.startsWith("{")
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+
+        return normalizeRelatedArticleIds(
+          parsed,
+          depth + 1
+        );
+      } catch {
+        return [trimmed];
+      }
+    }
+
+    return [trimmed];
+  }
+
+  if (typeof value === "object") {
+    const article = value as {
+      _id?: unknown;
+      id?: unknown;
+    };
+
+    if (article._id !== undefined) {
+      return normalizeRelatedArticleIds(
+        article._id,
+        depth + 1
+      );
+    }
+
+    if (article.id !== undefined) {
+      return normalizeRelatedArticleIds(
+        article.id,
+        depth + 1
+      );
+    }
+  }
+
+  return [];
+}
 
 async function validateRelatedArticles(
-  articleIds: string[] = [],
+  articleIds: unknown[] = [],
   currentBlogId?: string
 ): Promise<mongoose.Types.ObjectId[]> {
   if (!Array.isArray(articleIds)) {
@@ -2103,18 +2218,45 @@ async function validateRelatedArticles(
     );
   }
 
-  if (!articleIds.every(isValidObjectId)) {
+  const normalizedIds = normalizeRelatedArticleIds(
+    articleIds
+  )
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  const uniqueIds = [...new Set(normalizedIds)];
+
+  logger.info("Related articles validation:", {
+    received: articleIds,
+    normalized: normalizedIds,
+    unique: uniqueIds,
+    validation: uniqueIds.map((id) => ({
+      id,
+      length: id.length,
+      valid: isValidObjectId(id),
+    })),
+  });
+
+  const invalidIds = uniqueIds.filter(
+    (id) => !isValidObjectId(id)
+  );
+
+  if (invalidIds.length > 0) {
+    logger.error("Invalid related article IDs:", {
+      invalidIds,
+      received: articleIds,
+      normalized: normalizedIds,
+    });
+
     throw new AppError(
       "One or more related article IDs are invalid",
       400
     );
   }
 
-  const uniqueIds = [...new Set(articleIds)];
-
   if (
     currentBlogId &&
-    uniqueIds.includes(currentBlogId)
+    uniqueIds.includes(currentBlogId.trim())
   ) {
     throw new AppError(
       "A blog cannot be related to itself",
@@ -2126,22 +2268,39 @@ async function validateRelatedArticles(
     return [];
   }
 
+  const objectIds = uniqueIds.map(
+    (id) => new mongoose.Types.ObjectId(id)
+  );
+
   const existingArticles = await BlogModel.find({
-    _id: { $in: uniqueIds },
+    _id: { $in: objectIds },
   })
     .select("_id")
     .lean();
 
-  if (existingArticles.length !== uniqueIds.length) {
+  const existingIds = new Set(
+    existingArticles.map((article) =>
+      article._id.toString()
+    )
+  );
+
+  const missingIds = uniqueIds.filter(
+    (id) => !existingIds.has(id)
+  );
+
+  if (missingIds.length > 0) {
+    logger.error("Related articles not found:", {
+      missingIds,
+      requestedIds: uniqueIds,
+    });
+
     throw new AppError(
       "One or more related articles do not exist",
       400
     );
   }
 
-  return uniqueIds.map(
-    (id) => new mongoose.Types.ObjectId(id)
-  );
+  return objectIds;
 }
 
 function validateVideos(
@@ -2436,12 +2595,19 @@ export async function createBlogHandler(
       ) || []
     );
 
-    // NEW: RELATED ARTICLES
+    // RELATED ARTICLES
+    const parsedRelatedArticles = parseArrayField<unknown>(
+      req.body.relatedArticles,
+      "relatedArticles"
+    );
+
+    logger.info("Create blog - related articles:", {
+      raw: req.body.relatedArticles,
+      parsed: parsedRelatedArticles,
+    });
+
     const relatedArticles = await validateRelatedArticles(
-      parseArrayField<string>(
-        req.body.relatedArticles,
-        "relatedArticles"
-      ) || []
+      parsedRelatedArticles || []
     );
 
     let calculatedSortOrder = parseNumber(
@@ -2641,12 +2807,17 @@ export async function updateBlogHandler(
               new mongoose.Types.ObjectId(id.toString())
           );
 
-    // NEW: RELATED ARTICLES
+    // RELATED ARTICLES
     const articlesFromBody =
-      parseArrayField<string>(
+      parseArrayField<unknown>(
         req.body.relatedArticles,
         "relatedArticles"
       );
+
+    logger.info("Update blog - related articles:", {
+      raw: req.body.relatedArticles,
+      parsed: articlesFromBody,
+    });
 
     const relatedArticles =
       articlesFromBody !== undefined
@@ -2791,12 +2962,10 @@ export async function getBlogHandler(
         path: "relatedPackages",
         select: RELATED_PACKAGE_FIELDS,
       })
-      .populate({
-        path: "relatedArticles",
-        select: RELATED_ARTICLE_FIELDS,
-        match: { isActive: true },
-      });
-
+.populate({
+  path: "relatedArticles",
+  select: RELATED_ARTICLE_FIELDS,
+});
     if (!blog) {
       throw new AppError(
         "No blog found with that ID or slug",
